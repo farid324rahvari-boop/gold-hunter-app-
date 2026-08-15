@@ -199,7 +199,6 @@ button{font-family:inherit;cursor:pointer}
   </nav>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 /* =====================================================================================
    GOLD HUNTER — v2.0.0
@@ -870,9 +869,10 @@ async function buildMarketState() {
     // اگر آن تایم‌فریم را ندارد (مثل 4H/15M) یا Backend Proxy کامل وصل نیست، به DEMO می‌رود —
     // و این موضوع به‌وضوح در UI با تگ DEMO مشخص می‌ماند (هرگز به‌جای Live جا زده نمی‌شود).
     let ohlc = simpleQuoteProvider ? await simpleQuoteProvider.getOHLC(CONFIG.SYMBOL, tf, 200) : await provider.getOHLC(CONFIG.SYMBOL, tf, 200);
-    if (ohlc.status === STATUS.UNAVAILABLE || !ohlc.bars) {
+    if (ohlc.status === STATUS.UNAVAILABLE || !ohlc.bars || !ohlc.bars.length) {
       // تلاش دوباره با همان Provider بی‌فایده است (همان خطا تکرار می‌شود)؛ همیشه به DEMO برمی‌گردیم
-      // تا شکست یک تایم‌فریم (مثلاً Weekly که برخی Providerها پشتیبانی نمی‌کنند) کل اپ را غیرفعال نکند.
+      // تا شکست یک تایم‌فریم (مثلاً Weekly که برخی Providerها پشتیبانی نمی‌کنند، یا آرایه خالی
+      // به‌خاطر محدودیت نرخ) کل اپ را غیرفعال نکند.
       ohlc = await demoProvider.getOHLC(CONFIG.SYMBOL, tf, 200);
       technicalIsDemo = true;
     }
@@ -1402,10 +1402,36 @@ async function runBacktestNow() {
   if (currentPage === 'backtest') render();
 }
 
-function initChart() {
+// کتابخانه نمودار فقط وقتی کاربر واقعاً وارد صفحه «نمودار زنده» می‌شود از CDN لود می‌شود —
+// نه در بارگذاری اولیه اپ — تا اگر این CDN در دسترس/سریع نباشد، بقیه اپ (داشبورد، تکنیکال، ...)
+// هرگز بلاک یا معطل نشود.
+let _chartLibPromise = null;
+function loadChartLib() {
+  if (window.LightweightCharts) return Promise.resolve();
+  if (_chartLibPromise) return _chartLibPromise;
+  _chartLibPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js';
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('chart-lib-load-failed'));
+    document.head.appendChild(s);
+    setTimeout(() => reject(new Error('chart-lib-timeout')), 12000);
+  });
+  return _chartLibPromise;
+}
+
+async function initChart() {
   const container = document.getElementById('chart-canvas');
   const rsiContainer = document.getElementById('rsi-canvas');
-  if (!container || !window.LightweightCharts) return;
+  if (!container) return;
+  container.innerHTML = '<div class="state-box">در حال بارگذاری کتابخانه نمودار…</div>';
+  try {
+    await loadChartLib();
+  } catch (e) {
+    container.innerHTML = '<div class="state-box">کتابخانه نمودار در دسترس نیست (اتصال به CDN ناموفق بود). بقیه بخش‌های اپ بدون مشکل کار می‌کنند.</div>';
+    return;
+  }
+  if (currentPage !== 'chart') return; // کاربر ممکن است تا زمان لود‌شدن، صفحه را عوض کرده باشد
   container.innerHTML = ''; rsiContainer.innerHTML = '';
 
   chartInstance = LightweightCharts.createChart(container, {
@@ -1599,18 +1625,24 @@ function bindPageEvents() {
     const t1 = performance.now();
     const quote = await p.getQuote(CONFIG.SYMBOL);
     const t2 = performance.now();
-    const fmt = (v) => `<pre style="white-space:pre-wrap;word-break:break-all;font-size:10px;line-height:1.6;margin:0">${JSON.stringify(v, null, 1).slice(0, 700)}</pre>`;
+    const daily = await p.getOHLC(CONFIG.SYMBOL, 'Daily', 200);
+    const t3 = performance.now();
+    const weekly = await p.getOHLC(CONFIG.SYMBOL, 'Weekly', 200);
+    const t4 = performance.now();
+    const fmt = (v) => {
+      const s = JSON.stringify(v, null, 1);
+      return `<pre style="white-space:pre-wrap;word-break:break-all;font-size:10px;line-height:1.6;margin:0">${(s || '').slice(0, 500)}${v && v.bars ? ' …(' + v.bars.length + ' کندل)' : ''}</pre>`;
+    };
     const ok = (v) => v && v.status !== STATUS.UNAVAILABLE;
-    box.innerHTML = `
-      <div class="field-hint" style="margin-top:10px">
-        <b>GET /api/health</b> — ${Math.round(t1 - t0)}ms — ${health && health.ok ? '<span style="color:var(--bullish)">موفق ✓</span>' : '<span style="color:var(--bearish)">شکست ✗ (' + (health && health.error ? health.error : 'نامشخص') + ')</span>'}<br>
-        ${fmt(health)}
-      </div>
-      <div class="field-hint" style="margin-top:10px">
-        <b>GET /api/market/quote</b> — ${Math.round(t2 - t1)}ms — ${ok(quote) ? '<span style="color:var(--bullish)">موفق ✓</span>' : '<span style="color:var(--bearish)">شکست ✗ (' + (quote && quote.error ? quote.error : 'نامشخص') + ')</span>'}<br>
-        ${fmt(quote)}
-      </div>
-      <div class="field-hint" style="margin-top:6px">اگر «no-api-key-configured» دیدی، یعنی TWELVEDATA_API_KEY در تنظیمات Environment Variables رندر درست ثبت نشده. این پاسخ رو کپی و برام بفرست.</div>`;
+    const row = (label, ms, v) => `<div class="field-hint" style="margin-top:10px">
+        <b>${label}</b> — ${Math.round(ms)}ms — ${ok(v) ? '<span style="color:var(--bullish)">موفق ✓</span>' : '<span style="color:var(--bearish)">شکست ✗ (' + (v && v.error ? v.error : 'نامشخص') + ')</span>'}<br>
+        ${fmt(v)}
+      </div>`;
+    box.innerHTML = row('GET /api/health', t1 - t0, health && health.ok ? { status: 'LIVE' } : { status: 'UNAVAILABLE', error: health && health.error })
+      + row('GET /api/market/quote', t2 - t1, quote)
+      + row('GET /api/market/ohlc (Daily)', t3 - t2, daily)
+      + row('GET /api/market/ohlc (Weekly)', t4 - t3, weekly)
+      + `<div class="field-hint" style="margin-top:6px">اگر «no-api-key-configured» دیدی، یعنی TWELVEDATA_API_KEY درست ثبت نشده. اگر خطای دیگری (مثل rate limit) دیدی، همین پاسخ رو کپی و برام بفرست.</div>`;
   };
 }
 
