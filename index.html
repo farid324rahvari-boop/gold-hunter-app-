@@ -768,42 +768,93 @@ function generateAlerts(state) {
 }
 
 // =========================== 13. BACKTEST ENGINE ===========================
-// اگر Provider واقعی داده تاریخی نداشته باشد، این بخش به‌صراحت DEMO/UNAVAILABLE بودن را اعلام می‌کند
-// و هرگز نتیجه ساختگی را به‌عنوان بک‌تست واقعی نمایش نمی‌دهد.
-function runBacktest(bars) {
-  if (!bars || bars.length < 60) return { ok: false, reason: 'داده تاریخی کافی برای بک‌تست در دسترس نیست.' };
+// اصل مهم: این بک‌تست دقیقاً همان توابع Rule Engine / Regime / Breakout / Range را که
+// در تحلیل زنده استفاده می‌شوند فراخوانی می‌کند — نه یک استراتژی ساده‌شده جداگانه.
+// این‌طور نتیجه بک‌تست واقعاً منعکس‌کننده رفتار همان سیستمی است که تصمیم زنده می‌سازد.
+//
+// محدودیت صادقانه: چون فقط یک سری کندل (معمولاً 4H) در دسترس است، تایم‌فریم‌های
+// Daily و Weekly با تجمیع کندل‌های همان سری تقریب زده می‌شوند (نه داده مستقل واقعی)
+// و 15M همان کندل 4H را (به‌عنوان نزدیک‌ترین تقریب) به‌کار می‌برد. این بک‌تست هم‌چنین
+// اسپرد، کمیسیون و Slippage را مدل نمی‌کند — نتیجه واقعی معاملات همیشه بدتر از این است.
+
+function aggregateBars(bars, groupSize) {
+  const out = [];
+  for (let i = 0; i < bars.length; i += groupSize) {
+    const g = bars.slice(i, i + groupSize);
+    if (!g.length) continue;
+    out.push({
+      time: g[0].time, open: g[0].open, close: g[g.length - 1].close,
+      high: Math.max(...g.map(b => b.high)), low: Math.min(...g.map(b => b.low)),
+      volume: g.reduce((s, b) => s + (b.volume || 0), 0)
+    });
+  }
+  return out;
+}
+
+function runBacktest(bars4h) {
+  if (!bars4h || bars4h.length < 120) return { ok: false, reason: 'داده تاریخی کافی برای بک‌تست معنادار در دسترس نیست (حداقل ۱۲۰ کندل ۴ساعته لازم است).' };
+
   let trades = [], position = null;
-  for (let i = 30; i < bars.length; i++) {
-    const window = bars.slice(0, i + 1);
-    const closes = window.map(b => b.close);
-    const ema20 = calcEMA(closes.slice(-40), 20);
-    const rsi = calcRSI(closes, 14);
-    const sr = calcSupportResistance(window, 30);
-    const price = closes[closes.length - 1];
+  // از کندل ۱۰۰ام شروع می‌کنیم تا تایم‌فریم‌های تجمیعی (Daily/Weekly) داده کافی برای محاسبه داشته باشند
+  for (let i = 100; i < bars4h.length; i++) {
+    const window4h = bars4h.slice(0, i + 1);
+    const dailyApprox = aggregateBars(window4h, 6);   // ~۶ کندل ۴ساعته ≈ ۱ روز
+    const weeklyApprox = aggregateBars(window4h, 42); // ~۷ روز ≈ ۱ هفته
+
+    if (dailyApprox.length < 20 || weeklyApprox.length < 8) continue;
+
+    let techByTF;
+    try {
+      techByTF = {
+        'Weekly': buildTechnicalFrame(weeklyApprox),
+        'Daily': buildTechnicalFrame(dailyApprox),
+        '4H': buildTechnicalFrame(window4h),
+        '15M': buildTechnicalFrame(window4h) // تقریب — داده اینترادی مستقل در دسترس نیست
+      };
+    } catch (e) { continue; }
+
+    const price = window4h[window4h.length - 1].close;
+
     if (!position) {
-      if (price > ema20 && rsi > 52 && rsi < 75 && (sr.resistance - price) / price > 0.01) {
-        position = { entry: price, sl: sr.support, entryIdx: i };
+      const regime = detectRegime(techByTF);
+      const breakout = evaluateBreakout(techByTF, techByTF['Daily'].resistance);
+      const range = evaluateRange(techByTF);
+      const newsRisk = { score: 3, label: 'نامشخص در بک‌تست', high: false, hours: null }; // داده خبری تاریخی در دسترس نیست
+      const fundamental = { bias: 'neutral', score: 5, reasons: [] };
+      const decision = runRuleEngine({ techByTF, regime, breakout, range, newsRisk, fundamental });
+
+      if (decision.decision === 'BUY') {
+        const rr = structuralRR(techByTF, 'BUY');
+        if (rr.rr >= CONFIG.MIN_ACCEPTABLE_RR) position = { side: 'BUY', entry: price, sl: rr.sl, target: rr.target };
+      } else if (decision.decision === 'SELL') {
+        const rr = structuralRR(techByTF, 'SELL');
+        if (rr.rr >= CONFIG.MIN_ACCEPTABLE_RR) position = { side: 'SELL', entry: price, sl: rr.sl, target: rr.target };
       }
     } else {
-      const target = position.entry + (position.entry - position.sl) * CONFIG.MIN_ACCEPTABLE_RR;
-      if (price <= position.sl || price >= target || i === bars.length - 1) {
-        const pl = price - position.entry;
-        trades.push({ pl, rMultiple: pl / Math.abs(position.entry - position.sl) });
+      const hitSL = position.side === 'BUY' ? price <= position.sl : price >= position.sl;
+      const hitTarget = position.side === 'BUY' ? price >= position.target : price <= position.target;
+      if (hitSL || hitTarget || i === bars4h.length - 1) {
+        const pl = position.side === 'BUY' ? price - position.entry : position.entry - price;
+        const stopDist = Math.abs(position.entry - position.sl) || 1;
+        trades.push({ pl, rMultiple: pl / stopDist, side: position.side });
         position = null;
       }
     }
   }
+
   const wins = trades.filter(t => t.pl > 0);
   const netPl = trades.reduce((s, t) => s + t.pl, 0);
   const grossProfit = wins.reduce((s, t) => s + t.pl, 0);
   const grossLoss = Math.abs(trades.filter(t => t.pl < 0).reduce((s, t) => s + t.pl, 0));
   let peak = 0, running = 0, maxDD = 0;
   trades.forEach(t => { running += t.pl; peak = Math.max(peak, running); maxDD = Math.max(maxDD, peak - running); });
+
   return {
     ok: true, totalTrades: trades.length, winRate: trades.length ? ((wins.length / trades.length) * 100).toFixed(1) : '0',
     netPl: netPl.toFixed(2), profitFactor: grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : '—',
     avgR: trades.length ? (trades.reduce((s, t) => s + t.rMultiple, 0) / trades.length).toFixed(2) : '0',
-    maxDrawdown: maxDD.toFixed(2), winningTrades: wins.length, losingTrades: trades.length - wins.length
+    maxDrawdown: maxDD.toFixed(2), winningTrades: wins.length, losingTrades: trades.length - wins.length,
+    barsAnalyzed: bars4h.length
   };
 }
 
@@ -850,7 +901,20 @@ function activeQuoteProviderFn() {
 async function buildMarketState() {
   const provider = activeProviderFn();
   const simpleQuoteProvider = activeQuoteProviderFn();
-  let quote = simpleQuoteProvider ? await simpleQuoteProvider.getQuote(CONFIG.SYMBOL) : await provider.getQuote(CONFIG.SYMBOL);
+
+  // همه درخواست‌ها (قیمت + ۴ تایم‌فریم + تقویم) هم‌زمان (موازی) فرستاده می‌شوند، نه پشت سر هم —
+  // در حالت Backend Proxy با سرور خواب (Render رایگان)، اگر ۶ درخواست پشت‌سرهم با Timeout ۴۵ ثانیه‌ای
+  // اجرا شوند، بارگذاری اول می‌تواند چند دقیقه طول بکشد و به‌نظر «هنگ‌کردن» بیاید. موازی‌سازی این را
+  // به‌اندازه یک Timeout (حداکثر ~۴۵ ثانیه) کاهش می‌دهد.
+  const quotePromise = simpleQuoteProvider ? simpleQuoteProvider.getQuote(CONFIG.SYMBOL) : provider.getQuote(CONFIG.SYMBOL);
+  const ohlcPromises = TIMEFRAMES.map((tf) =>
+    (simpleQuoteProvider ? simpleQuoteProvider.getOHLC(CONFIG.SYMBOL, tf, 200) : provider.getOHLC(CONFIG.SYMBOL, tf, 200))
+      .then((ohlc) => ({ tf, ohlc }))
+  );
+  const calendarPromise = provider.getEconomicCalendar();
+
+  let [quote, ohlcResults, calendarResult] = await Promise.all([quotePromise, Promise.all(ohlcPromises), calendarPromise]);
+
   let quoteError = null;
   // اگر هر یک از دو حالت اتصال (ساده یا Backend Proxy کامل) فعال است ولی خود قیمت لحظه‌ای شکست خورد
   // (شبکه/Rate Limit/غیره)، به‌جای غیرفعال‌کردن کل اپ، مثل بقیه سیستم به‌صورت شفاف روی DEMO برمی‌گردیم —
@@ -864,18 +928,17 @@ async function buildMarketState() {
   let unavailable = false;
   let technicalIsDemo = !!quoteError;
 
-  for (const tf of TIMEFRAMES) {
-    // اول اتصال ساده (اگر فعال باشد) امتحان می‌شود چون Daily/Weekly واقعی می‌دهد؛
-    // اگر آن تایم‌فریم را ندارد (مثل 4H/15M) یا Backend Proxy کامل وصل نیست، به DEMO می‌رود —
-    // و این موضوع به‌وضوح در UI با تگ DEMO مشخص می‌ماند (هرگز به‌جای Live جا زده نمی‌شود).
-    let ohlc = simpleQuoteProvider ? await simpleQuoteProvider.getOHLC(CONFIG.SYMBOL, tf, 200) : await provider.getOHLC(CONFIG.SYMBOL, tf, 200);
-    if (ohlc.status === STATUS.UNAVAILABLE || !ohlc.bars || !ohlc.bars.length) {
-      // تلاش دوباره با همان Provider بی‌فایده است (همان خطا تکرار می‌شود)؛ همیشه به DEMO برمی‌گردیم
-      // تا شکست یک تایم‌فریم (مثلاً Weekly که برخی Providerها پشتیبانی نمی‌کنند، یا آرایه خالی
-      // به‌خاطر محدودیت نرخ) کل اپ را غیرفعال نکند.
-      ohlc = await demoProvider.getOHLC(CONFIG.SYMBOL, tf, 200);
-      technicalIsDemo = true;
-    }
+  // اگر هرکدام از تایم‌فریم‌ها شکست خورده باشند، به‌صورت موازی (نه پشت‌سرهم) از DEMO جایگزین می‌شوند
+  const fallbackNeeded = ohlcResults.filter(({ ohlc }) => ohlc.status === STATUS.UNAVAILABLE || !ohlc.bars || !ohlc.bars.length);
+  let fallbackResults = [];
+  if (fallbackNeeded.length) {
+    fallbackResults = await Promise.all(fallbackNeeded.map(({ tf }) => demoProvider.getOHLC(CONFIG.SYMBOL, tf, 200).then((ohlc) => ({ tf, ohlc }))));
+    technicalIsDemo = true;
+  }
+  const fallbackMap = Object.fromEntries(fallbackResults.map((r) => [r.tf, r.ohlc]));
+
+  for (const { tf, ohlc: originalOhlc } of ohlcResults) {
+    const ohlc = fallbackMap[tf] || originalOhlc;
     if (ohlc.status === STATUS.UNAVAILABLE || !ohlc.bars || !ohlc.bars.length) { unavailable = true; continue; }
     techByTF[tf] = buildTechnicalFrame(ohlc.bars);
     techByTF[tf].source = ohlc.status; // برای نمایش تگ LIVE/DEMO مجزا به‌ازای هر تایم‌فریم در UI
@@ -889,7 +952,6 @@ async function buildMarketState() {
   if (quote.price != null && (quote.status === STATUS.LIVE || quote.status === STATUS.DELAYED)) {
     Object.keys(techByTF).forEach((tf) => { techByTF[tf].price = quote.price; });
   }
-  let calendarResult = await provider.getEconomicCalendar();
   // تقویم اقتصادی همیشه به DEMO برمی‌گردد اگر در دسترس نباشد (مثلاً کلید تنظیم نشده)؛
   // نبود آن به‌تنهایی نباید کل داشبورد (قیمت/تکنیکال که ممکن است کاملاً Live باشند) را غیرفعال کند —
   // فقط خود تب فاندامنتال با تگ DEMO مشخص می‌شود.
@@ -1221,26 +1283,36 @@ function renderAlerts() {
     </div>`;
 }
 
-function renderBacktest(backtestResult) {
+function renderBacktest(backtestResult, backtestIsDemo) {
   return `${backRow('بک‌تست')}
-    <div class="section-title">🧪 بک‌تست Rule Engine</div>
-    <div class="backtest-note">⚠ این بک‌تست روی داده‌های DEMO (تولیدشده محلی) اجرا شده و صرفاً برای نمایش عملکرد Rule Engine است — نه پیش‌بینی واقعی بازار.
-    برای بک‌تست واقعی، Provider داده تاریخی واقعی (مثل TwelveData) را در Backend Proxy متصل کنید.</div>
+    <div class="section-title">🧪 بک‌تست Rule Engine واقعی</div>
+    <div class="backtest-note">
+      ${backtestIsDemo
+        ? '⚠ این بک‌تست روی داده DEMO (تولیدشده محلی) اجرا شده — فقط برای دیدن رفتار Rule Engine، نه بازار واقعی.'
+        : '🟢 این بک‌تست روی داده تاریخی واقعی (از Backend Proxy) اجرا شده.'}
+      <br><br>
+      <b>مهم — این تقریب است، نه شبیه‌سازی کامل:</b> چون فقط کندل‌های ۴ساعته در دسترس است، تایم‌فریم‌های Daily/Weekly
+      از تجمیع همان کندل‌ها تقریب زده می‌شوند و تایم‌فریم 15M از خود 4H استفاده می‌کند — نه داده مستقل واقعی.
+      اسپرد، کمیسیون و Slippage هم مدل نشده‌اند، پس نتیجه واقعی معاملات همیشه بدتر از این عدد خواهد بود.
+      این بک‌تست دقیقاً همان Rule Engine صفحه داشبورد را اجرا می‌کند (نه یک استراتژی جداگانه).
+    </div>
     ${!backtestResult || !backtestResult.ok ? `<div class="card"><div class="state-box">${backtestResult ? backtestResult.reason : 'در حال اجرای بک‌تست…'}</div></div>` : `
     <div class="card">
-      <div class="card-title-row"><div class="card-title">نتایج بک‌تست (DEMO)</div>${statusTag(STATUS.DEMO)}</div>
+      <div class="card-title-row"><div class="card-title">نتایج بک‌تست</div>${statusTag(backtestIsDemo ? STATUS.DEMO : STATUS.LIVE)}</div>
+      <div class="field-hint" style="margin-bottom:10px">تحلیل روی ${backtestResult.barsAnalyzed} کندل ۴ساعته</div>
       <div class="stat-grid">
         <div class="stat-box"><div class="stat-label">تعداد معاملات</div><div class="stat-value">${backtestResult.totalTrades}</div></div>
         <div class="stat-box"><div class="stat-label">نرخ برد</div><div class="stat-value">${backtestResult.winRate}%</div></div>
-        <div class="stat-box"><div class="stat-label">سود/زیان خالص</div><div class="stat-value" style="color:${backtestResult.netPl >= 0 ? 'var(--bullish)' : 'var(--bearish)'}">$${backtestResult.netPl}</div></div>
+        <div class="stat-box"><div class="stat-label">سود/زیان خالص (واحد قیمت)</div><div class="stat-value" style="color:${backtestResult.netPl >= 0 ? 'var(--bullish)' : 'var(--bearish)'}">${backtestResult.netPl}</div></div>
         <div class="stat-box"><div class="stat-label">Profit Factor</div><div class="stat-value">${backtestResult.profitFactor}</div></div>
         <div class="stat-box"><div class="stat-label">میانگین R</div><div class="stat-value">${backtestResult.avgR}</div></div>
-        <div class="stat-box"><div class="stat-label">حداکثر افت سرمایه</div><div class="stat-value" style="color:var(--bearish)">$${backtestResult.maxDrawdown}</div></div>
+        <div class="stat-box"><div class="stat-label">حداکثر افت سرمایه</div><div class="stat-value" style="color:var(--bearish)">${backtestResult.maxDrawdown}</div></div>
         <div class="stat-box"><div class="stat-label">معاملات برنده</div><div class="stat-value" style="color:var(--bullish)">${backtestResult.winningTrades}</div></div>
         <div class="stat-box"><div class="stat-label">معاملات بازنده</div><div class="stat-value" style="color:var(--bearish)">${backtestResult.losingTrades}</div></div>
       </div>
+      ${backtestResult.totalTrades < 15 ? '<div class="field-hint" style="margin-top:10px;color:var(--neutral)">⚠ تعداد معاملات کم است — با این حجم نمونه نمی‌توان نتیجه آماری قابل‌اعتمادی گرفت.</div>' : ''}
     </div>`}
-    <button class="btn btn-ghost" id="btn-rerun-backtest">🔄 اجرای مجدد روی سری داده جدید</button>`;
+    <button class="btn btn-ghost" id="btn-rerun-backtest">🔄 اجرای مجدد</button>`;
 }
 
 const TRADE_RULES = [
@@ -1383,7 +1455,7 @@ async function render() {
   else if (currentPage === 'chart') { el.innerHTML = renderChart(); initChart(); }
   else if (currentPage === 'ai') { el.innerHTML = renderAI(); if (!aiState.result && !aiState.loading) loadAI(); }
   else if (currentPage === 'alerts') el.innerHTML = renderAlerts();
-  else if (currentPage === 'backtest') { el.innerHTML = renderBacktest(backtestCache); if (!backtestCache) runBacktestNow(); }
+  else if (currentPage === 'backtest') { el.innerHTML = renderBacktest(backtestCache, backtestIsDemo); if (!backtestCache) runBacktestNow(); }
 
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === currentPage));
   bindPageEvents();
@@ -1395,9 +1467,12 @@ async function loadAI() {
   aiState.loading = false; render();
 }
 
+let backtestIsDemo = true;
 async function runBacktestNow() {
   const provider = activeProviderFn();
-  const ohlc = await provider.getOHLC(CONFIG.SYMBOL, '4H', 400);
+  let ohlc = await provider.getOHLC(CONFIG.SYMBOL, '4H', 800);
+  backtestIsDemo = !ohlc.bars || ohlc.status !== STATUS.LIVE;
+  if (backtestIsDemo) ohlc = await demoProvider.getOHLC(CONFIG.SYMBOL, '4H', 800);
   backtestCache = ohlc.bars ? runBacktest(ohlc.bars) : { ok: false, reason: 'داده تاریخی در دسترس نیست.' };
   if (currentPage === 'backtest') render();
 }
