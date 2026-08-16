@@ -902,16 +902,25 @@ async function buildMarketState() {
   const provider = activeProviderFn();
   const simpleQuoteProvider = activeQuoteProviderFn();
 
+  // هر Provider باید status:UNAVAILABLE برگرداند نه Exception پرتاب کند، اما به‌عنوان یک محافظ اضافه
+  // (مثلاً در برابر پاسخ غیرمنتظره یک API واقعی)، هر Promise را با safeCall می‌پیچیم تا یک خطای
+  // پیش‌بینی‌نشده در یک بخش، کل زنجیره Promise.all را نشکند و صفحه خالی نماند.
+  const safeCall = (promiseFactory, fallbackLabel) =>
+    Promise.resolve().then(promiseFactory).catch((e) => ({
+      status: STATUS.UNAVAILABLE,
+      error: `${fallbackLabel}-exception: ${e && e.message ? e.message : String(e)}`
+    }));
+
   // همه درخواست‌ها (قیمت + ۴ تایم‌فریم + تقویم) هم‌زمان (موازی) فرستاده می‌شوند، نه پشت سر هم —
   // در حالت Backend Proxy با سرور خواب (Render رایگان)، اگر ۶ درخواست پشت‌سرهم با Timeout ۴۵ ثانیه‌ای
   // اجرا شوند، بارگذاری اول می‌تواند چند دقیقه طول بکشد و به‌نظر «هنگ‌کردن» بیاید. موازی‌سازی این را
   // به‌اندازه یک Timeout (حداکثر ~۴۵ ثانیه) کاهش می‌دهد.
-  const quotePromise = simpleQuoteProvider ? simpleQuoteProvider.getQuote(CONFIG.SYMBOL) : provider.getQuote(CONFIG.SYMBOL);
+  const quotePromise = safeCall(() => simpleQuoteProvider ? simpleQuoteProvider.getQuote(CONFIG.SYMBOL) : provider.getQuote(CONFIG.SYMBOL), 'quote');
   const ohlcPromises = TIMEFRAMES.map((tf) =>
-    (simpleQuoteProvider ? simpleQuoteProvider.getOHLC(CONFIG.SYMBOL, tf, 200) : provider.getOHLC(CONFIG.SYMBOL, tf, 200))
+    safeCall(() => simpleQuoteProvider ? simpleQuoteProvider.getOHLC(CONFIG.SYMBOL, tf, 200) : provider.getOHLC(CONFIG.SYMBOL, tf, 200), 'ohlc-' + tf)
       .then((ohlc) => ({ tf, ohlc }))
   );
-  const calendarPromise = provider.getEconomicCalendar();
+  const calendarPromise = safeCall(() => provider.getEconomicCalendar(), 'calendar');
 
   let [quote, ohlcResults, calendarResult] = await Promise.all([quotePromise, Promise.all(ohlcPromises), calendarPromise]);
 
@@ -1723,7 +1732,27 @@ function bindPageEvents() {
 
 // =========================== 18. BOOTSTRAP ===========================
 async function refreshState() {
-  M = await buildMarketState();
+  try {
+    M = await buildMarketState();
+  } catch (e) {
+    // محافظ نهایی: حتی یک خطای کاملاً غیرمنتظره هم نباید صفحه را برای همیشه خالی نگه دارد —
+    // به‌جای هنگ‌کردن، حداقل روی DEMO باز می‌گردیم تا اپ همیشه قابل‌استفاده بماند.
+    console.error('[gold-hunter] buildMarketState failed unexpectedly:', e);
+    try { M = await (async () => {
+      const q = await demoProvider.getQuote(CONFIG.SYMBOL);
+      const techByTF = {};
+      for (const tf of TIMEFRAMES) { const o = await demoProvider.getOHLC(CONFIG.SYMBOL, tf, 200); techByTF[tf] = buildTechnicalFrame(o.bars); techByTF[tf].source = STATUS.DEMO; }
+      const regime = detectRegime(techByTF);
+      const breakout = evaluateBreakout(techByTF, techByTF['Daily'].resistance);
+      const range = evaluateRange(techByTF);
+      const cal = await demoProvider.getEconomicCalendar();
+      const newsRisk = evaluateNewsRisk(cal);
+      const fundamental = evaluateFundamental(cal.events || []);
+      const decision = runRuleEngine({ techByTF, regime, breakout, range, newsRisk, fundamental });
+      const hunter = calcHunterScore({ techByTF, regime, decision, newsRisk, fundamental }, settings.weights);
+      return { unavailable: false, status: STATUS.DEMO, quote: q, techByTF, regime, breakout, range, newsRisk, fundamental, decision, scores: hunter.scores, hunterScore: hunter.hunterScore, calendarResult: cal, technicalIsDemo: true, quoteError: 'recovered-from-error: ' + (e && e.message) };
+    })(); } catch (e2) { M = { unavailable: true, status: STATUS.UNAVAILABLE, quote: { status: STATUS.UNAVAILABLE }, calendarResult: { status: STATUS.UNAVAILABLE, events: [] } }; }
+  }
   aiState.result = null;
   render();
 }
