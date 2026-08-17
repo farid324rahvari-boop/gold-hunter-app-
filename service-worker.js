@@ -3,7 +3,7 @@
 // این Service Worker هرگز داده‌های بازار (قیمت/تحلیل) را کش نمی‌کند؛
 // درخواست‌های /api/* همیشه از شبکه خوانده می‌شوند تا داده قدیمی به‌جای Live نمایش داده نشود.
 
-const CACHE_NAME = 'gold-hunter-shell-v1';
+const CACHE_NAME = 'gold-hunter-shell-v3';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -43,7 +43,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Shell استاتیک: Cache First با بازگشت به شبکه
+  // خود صفحه اصلی (HTML) همیشه Network First است — تا وقتی اینترنت داری، همیشه آخرین نسخه واقعی
+  // دیده شود، نه یک نسخه قدیمی گیرکرده در کش. فقط وقتی واقعاً آفلاینی، از کش استفاده می‌شود.
+  if (event.request.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname === '/' || url.pathname.endsWith('/')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((res) => {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          return res;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // بقیه فایل‌های استاتیک (آیکون، manifest): Cache First با بازگشت به شبکه
   event.respondWith(
     caches.match(event.request).then((cached) => cached || fetch(event.request).catch(() => cached))
   );
