@@ -1453,21 +1453,34 @@ let backtestCache = null;
 async function render() {
   const el = document.getElementById('page');
   const statusTagEl = document.getElementById('global-status-tag');
-  if (M && !M.unavailable) { statusTagEl.className = 'tag ' + STATUS_META[M.status].cls; statusTagEl.textContent = STATUS_META[M.status].label; }
-  else if (M && M.unavailable) { statusTagEl.className = 'tag tag-unavailable'; statusTagEl.textContent = STATUS_META.UNAVAILABLE.label; }
+  try {
+    if (M && !M.unavailable) { statusTagEl.className = 'tag ' + STATUS_META[M.status].cls; statusTagEl.textContent = STATUS_META[M.status].label; }
+    else if (M && M.unavailable) { statusTagEl.className = 'tag tag-unavailable'; statusTagEl.textContent = STATUS_META.UNAVAILABLE.label; }
 
-  if (currentPage === 'dashboard') el.innerHTML = renderDashboard();
-  else if (currentPage === 'technical') el.innerHTML = renderTechnical();
-  else if (currentPage === 'fundamental') el.innerHTML = renderFundamental();
-  else if (currentPage === 'risk') el.innerHTML = renderRisk();
-  else if (currentPage === 'settings') el.innerHTML = renderSettings();
-  else if (currentPage === 'chart') { el.innerHTML = renderChart(); initChart(); }
-  else if (currentPage === 'ai') { el.innerHTML = renderAI(); if (!aiState.result && !aiState.loading) loadAI(); }
-  else if (currentPage === 'alerts') el.innerHTML = renderAlerts();
-  else if (currentPage === 'backtest') { el.innerHTML = renderBacktest(backtestCache, backtestIsDemo); if (!backtestCache) runBacktestNow(); }
+    if (currentPage === 'dashboard') el.innerHTML = renderDashboard();
+    else if (currentPage === 'technical') el.innerHTML = renderTechnical();
+    else if (currentPage === 'fundamental') el.innerHTML = renderFundamental();
+    else if (currentPage === 'risk') el.innerHTML = renderRisk();
+    else if (currentPage === 'settings') el.innerHTML = renderSettings();
+    else if (currentPage === 'chart') { el.innerHTML = renderChart(); initChart(); }
+    else if (currentPage === 'ai') { el.innerHTML = renderAI(); if (!aiState.result && !aiState.loading) loadAI(); }
+    else if (currentPage === 'alerts') el.innerHTML = renderAlerts();
+    else if (currentPage === 'backtest') { el.innerHTML = renderBacktest(backtestCache, backtestIsDemo); if (!backtestCache) runBacktestNow(); }
 
-  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === currentPage));
-  bindPageEvents();
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === currentPage));
+    bindPageEvents();
+  } catch (e) {
+    // محافظ نهایی رندر: هرگز نباید صفحه برای همیشه خالی بماند — حتی اگر یک باگ پیش‌بینی‌نشده باشد،
+    // پیام خطای قابل‌فهم و دکمه بازگشت/تلاش مجدد نشان بده.
+    console.error('[gold-hunter] render() failed:', e);
+    if (el) {
+      el.innerHTML = `<div class="card"><div class="card-title-row"><div class="card-title">خطای غیرمنتظره در نمایش صفحه</div></div>
+        <div class="state-box">یک خطای پیش‌بینی‌نشده رخ داد.<br><span class="mono" style="font-size:10px;word-break:break-all">${(e && e.message ? e.message : String(e)).replace(/</g, '&lt;')}</span></div>
+        <button class="btn btn-ghost" id="btn-error-recover" style="margin-top:10px">🔄 بازگشت به داشبورد</button></div>`;
+      const recoverBtn = document.getElementById('btn-error-recover');
+      if (recoverBtn) recoverBtn.onclick = () => { currentPage = 'dashboard'; render(); };
+    }
+  }
 }
 
 async function loadAI() {
