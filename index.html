@@ -1025,7 +1025,10 @@ function renderDashboard() {
   if (!M) return `<div class="state-box">در حال بارگذاری داده بازار…</div>`;
   if (M.unavailable) return unavailableCard('قیمت لحظه‌ای XAU/USD');
 
-  const p = M.quote, up = p.change >= 0;
+  // محافظ در برابر Providerهایی که ممکن است همه فیلدها (change/high/low) را ندهند —
+  // تا هرگز به‌خاطر یک فیلد ناقص، کل داشبورد کرش نکند.
+  const p = { ...M.quote, price: M.quote.price ?? 0, change: M.quote.change ?? 0, changePercent: M.quote.changePercent ?? 0, high: M.quote.high ?? M.quote.price ?? 0, low: M.quote.low ?? M.quote.price ?? 0 };
+  const up = p.change >= 0;
   const dec = M.decision.decision;
   return `
     <div class="quick-links">
