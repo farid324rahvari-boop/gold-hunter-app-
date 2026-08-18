@@ -245,6 +245,23 @@ function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+// تبدیل میلادی به شمسی — برای اینکه تاریخ‌های DEMO همیشه نسبت به «امروز» و به‌روز باشند
+function toJalaliStr(date) {
+  const gy = date.getUTCFullYear(), gm = date.getUTCMonth() + 1, gd = date.getUTCDate();
+  const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  let jy = gy <= 1600 ? 0 : 979;
+  const gy0 = gy - (gy <= 1600 ? 621 : 1600);
+  const gy2 = gm > 2 ? gy0 + 1 : gy0;
+  let days = 365 * gy0 + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) - 80 + gd + g_d_m[gm - 1];
+  jy += 33 * Math.floor(days / 12053); days %= 12053;
+  jy += 4 * Math.floor(days / 1461); days %= 1461;
+  jy += Math.floor((days - 1) / 365);
+  if (days > 365) days = (days - 1) % 365;
+  const jm = days < 186 ? 1 + Math.floor(days / 31) : 7 + Math.floor((days - 186) / 30);
+  const jd = 1 + (days < 186 ? days % 31 : (days - 186) % 30);
+  const toFa = (n) => String(n).replace(/[0-9]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+  return `${toFa(jy)}/${toFa(String(jm).padStart(2, '0'))}/${toFa(String(jd).padStart(2, '0'))}`;
+}
 
 class DemoDataProvider extends DataProvider {
   constructor(seed) {
@@ -297,19 +314,21 @@ class DemoDataProvider extends DataProvider {
     return { status: STATUS.DEMO, symbol, timeframe, bars: this._genBars(timeframe, limit || 200) };
   }
   async getEconomicCalendar() {
-    // رویدادهای نمونه — تاریخ شمسی صرفاً برای نمایش ساختار جدول است (⚠ DEMO)
+    // رویدادهای نمونه — تاریخ‌ها همیشه نسبت به «امروز» تولید می‌شوند (نه تاریخ ثابت)
+    // تا در حالت DEMO هم همیشه به‌روز به نظر برسند — اعداد صرفاً برای نمایش ساختار جدول است (⚠ DEMO)
+    const dOffset = (days) => toJalaliStr(new Date(Date.now() + days * 86400000));
     return {
       status: STATUS.DEMO,
       events: [
-        { t: 'CPI آمریکا', d: '۱۴۰۵/۰۵/۲۲', time: '16:00', imp: 'high', p: '3.1%', f: '3.0%', a: '—' },
-        { t: 'Core CPI', d: '۱۴۰۵/۰۵/۲۲', time: '16:00', imp: 'high', p: '3.4%', f: '3.3%', a: '—' },
-        { t: 'PPI', d: '۱۴۰۵/۰۵/۲۳', time: '16:00', imp: 'medium', p: '2.4%', f: '2.3%', a: '—' },
-        { t: 'PCE', d: '۱۴۰۵/۰۶/۰۷', time: '16:00', imp: 'high', p: '2.6%', f: '2.5%', a: '—' },
-        { t: 'NFP', d: '۱۴۰۵/۰۶/۱۴', time: '16:00', imp: 'high', p: '142K', f: '150K', a: '—' },
-        { t: 'سخنرانی رئیس فدرال رزرو', d: '۱۴۰۵/۰۵/۳۱', time: '17:30', imp: 'high', p: '—', f: '—', a: '—' },
-        { t: 'نشست FOMC و نرخ بهره', d: '۱۴۰۵/۰۶/۲۶', time: '21:00', imp: 'high', p: '4.25-4.50%', f: '4.00-4.25%', a: '—' },
-        { t: 'DXY (روزانه)', d: '۱۴۰۵/۰۵/۲۱', time: '—', imp: 'medium', p: '97.8', f: '—', a: '97.2' },
-        { t: 'US10Y (روزانه)', d: '۱۴۰۵/۰۵/۲۱', time: '—', imp: 'medium', p: '4.28%', f: '—', a: '4.19%' }
+        { t: 'CPI آمریکا', d: dOffset(2), time: '16:00', imp: 'high', p: '3.1%', f: '3.0%', a: '—' },
+        { t: 'Core CPI', d: dOffset(2), time: '16:00', imp: 'high', p: '3.4%', f: '3.3%', a: '—' },
+        { t: 'PPI', d: dOffset(3), time: '16:00', imp: 'medium', p: '2.4%', f: '2.3%', a: '—' },
+        { t: 'PCE', d: dOffset(9), time: '16:00', imp: 'high', p: '2.6%', f: '2.5%', a: '—' },
+        { t: 'NFP', d: dOffset(12), time: '16:00', imp: 'high', p: '142K', f: '150K', a: '—' },
+        { t: 'سخنرانی رئیس فدرال رزرو', d: dOffset(6), time: '17:30', imp: 'high', p: '—', f: '—', a: '—' },
+        { t: 'نشست FOMC و نرخ بهره', d: dOffset(14), time: '21:00', imp: 'high', p: '4.25-4.50%', f: '4.00-4.25%', a: '—' },
+        { t: 'DXY (روزانه)', d: dOffset(-1), time: '—', imp: 'medium', p: '97.8', f: '—', a: '97.2' },
+        { t: 'US10Y (روزانه)', d: dOffset(-1), time: '—', imp: 'medium', p: '4.28%', f: '—', a: '4.19%' }
       ],
       // ساعت‌های فرضی تا نزدیک‌ترین خبر مهم — برای نمایش سازوکار News Risk در حالت DEMO
       hoursToNextHighImpact: 6.5
