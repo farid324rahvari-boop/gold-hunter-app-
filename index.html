@@ -224,7 +224,7 @@ const STATUS_META = {
   UNAVAILABLE: { cls: 'tag-unavailable', label: '🔴 داده زنده در دسترس نیست' },
   DEMO: { cls: 'tag-demo', label: '⚠ DEMO DATA' }
 };
-const TIMEFRAMES = ['Weekly', 'Daily', '4H', '15M'];
+const TIMEFRAMES = ['Weekly', 'Daily', '4H', '1H', '15M'];
 
 // =========================== 1. DATA PROVIDER LAYER ===========================
 // هر Provider باید getQuote / getOHLC / getEconomicCalendar را پیاده‌سازی کند
@@ -510,20 +510,90 @@ function trendLabel(closes, ema20) {
   return { key: 'NEUTRAL', label: 'خنثی' };
 }
 
+// ATR14 — میانگین محدوده واقعی (True Range) با هموارسازی Wilder، دقیقاً مثل RSI استاندارد
+function calcATR(bars, period) {
+  period = period || 14;
+  if (bars.length < 2) return null;
+  const trueRanges = [];
+  for (let i = 1; i < bars.length; i++) {
+    const tr = Math.max(
+      bars[i].high - bars[i].low,
+      Math.abs(bars[i].high - bars[i - 1].close),
+      Math.abs(bars[i].low - bars[i - 1].close)
+    );
+    trueRanges.push(tr);
+  }
+  if (trueRanges.length < period) return trueRanges.reduce((a, b) => a + b, 0) / trueRanges.length;
+  let atr = trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trueRanges.length; i++) atr = (atr * (period - 1) + trueRanges[i]) / period;
+  return atr;
+}
+
+// تشخیص Swing High/Low (نقاط چرخش قیمت) — یک کندل Swing High است اگر High آن از
+// `strength` کندل قبل و بعدش بیشتر باشد (همین‌طور برای Swing Low)
+function findSwingPoints(bars, strength) {
+  strength = strength || 3;
+  const swings = [];
+  for (let i = strength; i < bars.length - strength; i++) {
+    const windowBars = bars.slice(i - strength, i + strength + 1);
+    if (bars[i].high === Math.max(...windowBars.map(b => b.high))) swings.push({ index: i, type: 'high', price: bars[i].high });
+    else if (bars[i].low === Math.min(...windowBars.map(b => b.low))) swings.push({ index: i, type: 'low', price: bars[i].low });
+  }
+  return swings;
+}
+
+// طبقه‌بندی ساختار بازار از روی توالی Swingها: HH/HL (صعودی) یا LH/LL (نزولی)،
+// و تشخیص BOS (ادامه ساختار غالب) در برابر CHoCH (تغییر جهت ساختار) از روی کندل واقعی —
+// نه مقدار ساختگی. اگر Swing کافی برای نتیجه‌گیری نباشد، صادقانه null برمی‌گردد.
+function classifyStructure(bars, swings) {
+  const highs = swings.filter(s => s.type === 'high');
+  const lows = swings.filter(s => s.type === 'low');
+  if (highs.length < 2 || lows.length < 2) return { bias: null, bos: false, choch: false, label: 'ساختار کافی برای تحلیل موجود نیست' };
+
+  const lastHigh = highs[highs.length - 1], prevHigh = highs[highs.length - 2];
+  const lastLow = lows[lows.length - 1], prevLow = lows[lows.length - 2];
+  const higherHigh = lastHigh.price > prevHigh.price;
+  const higherLow = lastLow.price > prevLow.price;
+  const lowerHigh = lastHigh.price < prevHigh.price;
+  const lowerLow = lastLow.price < prevLow.price;
+
+  let bias = null;
+  if (higherHigh && higherLow) bias = 'UP';
+  else if (lowerHigh && lowerLow) bias = 'DOWN';
+
+  const currentPrice = bars[bars.length - 1].close;
+  let bos = false, choch = false, label;
+  if (bias === 'UP') {
+    bos = currentPrice > lastHigh.price;
+    choch = currentPrice < lastLow.price; // شکست حمایت ساختاری در روند صعودی = تغییر ساختار
+    label = bos ? 'BOS صعودی — ادامه ساختار' : choch ? 'CHoCH — احتمال تغییر ساختار به نزولی' : 'ساختار صعودی (HH/HL) دست‌نخورده';
+  } else if (bias === 'DOWN') {
+    bos = currentPrice < lastLow.price;
+    choch = currentPrice > lastHigh.price;
+    label = bos ? 'BOS نزولی — ادامه ساختار' : choch ? 'CHoCH — احتمال تغییر ساختار به صعودی' : 'ساختار نزولی (LH/LL) دست‌نخورده';
+  } else {
+    label = 'ساختار نامشخص/آمیخته (HH+LL یا LH+HL)';
+  }
+  return { bias, bos, choch, label, lastSwingHigh: lastHigh.price, lastSwingLow: lastLow.price };
+}
+
 function buildTechnicalFrame(bars) {
   const closes = bars.map(b => b.close);
   const ema20 = calcEMA(closes.slice(-60), 20);
   const rsi = calcRSI(closes, 14);
+  const atr14 = calcATR(bars.slice(-60), 14);
   const sr = calcSupportResistance(bars, 40);
   const vol = avgVolume(bars, 20);
   const recentVol = avgVolume(bars, 5);
   const trend = trendLabel(closes, ema20);
+  const swings = findSwingPoints(bars.slice(-80), 3);
+  const structure = classifyStructure(bars.slice(-80), swings);
   return {
     price: closes[closes.length - 1], trend: trend.label, trendKey: trend.key,
-    ema20, rsi, support: sr.support, resistance: sr.resistance,
+    ema20, rsi, atr14, support: sr.support, resistance: sr.resistance,
     volumeState: recentVol > vol * 1.1 ? 'بالاتر از میانگین' : recentVol < vol * 0.9 ? 'کاهشی' : 'نرمال',
     volumeConfirmed: recentVol > vol * 1.05,
-    bars
+    structure, bars
   };
 }
 
@@ -681,11 +751,15 @@ function runRuleEngine(state) {
   if (!block && candidate === 'BUY') {
     if (distToResistance < 0.6) block = 'قیمت بیش از حد به مقاومت مهم نزدیک است — ریسک برخورد به مقاومت بالاست.';
     else if (!breakout.confirmed && distToResistance < 1.5) block = 'شکست معتبر مقاومت هنوز تأیید نشده (' + breakout.progress + ' مرحله) — تا تکمیل مراحل Breakout، خرید مجاز نیست.';
+    else if (techByTF['1H'] && techByTF['1H'].trendKey === 'DOWN') block = 'روند میان‌مدت ۱ساعته با خرید هم‌راستا نیست — تأیید ۱H لازم است.';
+    else if (techByTF['1H'] && techByTF['1H'].structure.choch) block = 'تغییر ساختار (CHoCH) در تایم‌فریم ۱ساعته شناسایی شد — تا تثبیت مجدد ساختار، خرید مجاز نیست.';
     else if (rrBuy.rr < CONFIG.MIN_ACCEPTABLE_RR) block = `نسبت ریسک به ریوارد ساختاری (1:${rrBuy.rr.toFixed(2)}) کمتر از حداقل قابل قبول (1:${CONFIG.MIN_ACCEPTABLE_RR}) است.`;
     else if (newsRisk.high) block = 'خبر اقتصادی مهم نزدیک است و ریسک نوسان بالاست — ورود توصیه نمی‌شود یا باید حجم کاهش یابد.';
   }
   if (!block && candidate === 'SELL') {
     if (distToSupport < 0.6) block = 'قیمت بیش از حد به حمایت مهم نزدیک است — ریسک برخورد به حمایت بالاست.';
+    else if (techByTF['1H'] && techByTF['1H'].trendKey === 'UP') block = 'روند میان‌مدت ۱ساعته با فروش هم‌راستا نیست — تأیید ۱H لازم است.';
+    else if (techByTF['1H'] && techByTF['1H'].structure.choch) block = 'تغییر ساختار (CHoCH) در تایم‌فریم ۱ساعته شناسایی شد — تا تثبیت مجدد ساختار، فروش مجاز نیست.';
     else if (rrSell.rr < CONFIG.MIN_ACCEPTABLE_RR) block = `نسبت ریسک به ریوارد ساختاری (1:${rrSell.rr.toFixed(2)}) کمتر از حداقل قابل قبول (1:${CONFIG.MIN_ACCEPTABLE_RR}) است.`;
     else if (newsRisk.high) block = 'خبر اقتصادی مهم نزدیک است و ریسک نوسان بالاست — ورود توصیه نمی‌شود یا باید حجم کاهش یابد.';
   }
@@ -1147,10 +1221,24 @@ function renderTechnical() {
         <div class="stat-box"><div class="stat-label">روند</div><div class="stat-value" style="font-family:'Vazirmatn';direction:rtl;text-align:right">${t.trend}</div></div>
         <div class="stat-box"><div class="stat-label">EMA20</div><div class="stat-value">${round2(t.ema20)}</div></div>
         <div class="stat-box"><div class="stat-label">RSI</div><div class="stat-value">${round2(t.rsi)}</div></div>
+        <div class="stat-box"><div class="stat-label">ATR14</div><div class="stat-value">${t.atr14 != null ? round2(t.atr14) : '—'}</div></div>
         <div class="stat-box"><div class="stat-label">حجم</div><div class="stat-value" style="font-family:'Vazirmatn';direction:rtl;text-align:right">${t.volumeState}</div></div>
         <div class="stat-box"><div class="stat-label">حمایت</div><div class="stat-value" style="color:var(--bullish)">${round2(t.support)}</div></div>
         <div class="stat-box"><div class="stat-label">مقاومت</div><div class="stat-value" style="color:var(--bearish)">${round2(t.resistance)}</div></div>
       </div>
+    </div>
+    <div class="card">
+      <div class="card-title-row"><div class="card-title">ساختار بازار (Market Structure) — ${techTab}</div></div>
+      <div style="margin-bottom:10px">
+        ${t.structure.bias === 'UP' ? '<span class="tag tag-bullish">ساختار صعودی (HH/HL)</span>' : t.structure.bias === 'DOWN' ? '<span class="tag tag-bearish">ساختار نزولی (LH/LL)</span>' : '<span class="tag tag-neutral">ساختار نامشخص</span>'}
+        ${t.structure.bos ? '<span class="tag tag-bullish" style="margin-right:6px">BOS ✓</span>' : ''}
+        ${t.structure.choch ? '<span class="tag tag-bearish" style="margin-right:6px">CHoCH ⚠</span>' : ''}
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:1.8">${t.structure.label}</div>
+      ${t.structure.lastSwingHigh ? `<div class="stat-grid" style="margin-top:10px">
+        <div class="stat-box"><div class="stat-label">آخرین Swing High</div><div class="stat-value" style="color:var(--bearish)">${round2(t.structure.lastSwingHigh)}</div></div>
+        <div class="stat-box"><div class="stat-label">آخرین Swing Low</div><div class="stat-value" style="color:var(--bullish)">${round2(t.structure.lastSwingLow)}</div></div>
+      </div>` : ''}
     </div>
     <div class="card">
       <div class="card-title-row"><div class="card-title">تفکیک حمایت و مقاومت</div></div>
