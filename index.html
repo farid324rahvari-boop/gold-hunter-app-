@@ -1208,12 +1208,61 @@ function renderChart() {
     </div>`;
 }
 
+function buildTechnicalSummary(M) {
+  const order = ['Weekly', 'Daily', '4H', '1H', '15M'];
+  const rows = order.map((tf) => {
+    const f = M.techByTF[tf];
+    const trendColor = f.trendKey === 'UP' ? 'var(--bullish)' : f.trendKey === 'DOWN' ? 'var(--bearish)' : 'var(--neutral)';
+    const rsiColor = f.rsi > 70 ? 'var(--bearish)' : f.rsi < 30 ? 'var(--bullish)' : 'var(--text-primary)';
+    const rsiNote = f.rsi > 70 ? ' (اشباع خرید)' : f.rsi < 30 ? ' (اشباع فروش)' : '';
+    let structBadge;
+    if (f.structure.choch) structBadge = `<span style="color:var(--bearish)">⚠ CHoCH</span>`;
+    else if (f.structure.bos) structBadge = `<span style="color:var(--bullish)">✓ BOS</span>`;
+    else if (f.structure.bias === 'UP') structBadge = `<span style="color:var(--bullish)">HH/HL</span>`;
+    else if (f.structure.bias === 'DOWN') structBadge = `<span style="color:var(--bearish)">LH/LL</span>`;
+    else structBadge = `<span style="color:var(--text-muted)">نامشخص</span>`;
+    return `<tr>
+      <td style="font-weight:700">${tf}</td>
+      <td style="color:${trendColor}">${f.trend}</td>
+      <td class="mono" style="color:${rsiColor}">${round2(f.rsi)}${rsiNote}</td>
+      <td>${structBadge}</td>
+    </tr>`;
+  }).join('');
+
+  const bullishCount = order.filter((tf) => M.techByTF[tf].trendKey === 'UP').length;
+  const bearishCount = order.filter((tf) => M.techByTF[tf].trendKey === 'DOWN').length;
+  const alignment = bullishCount >= 4 ? { label: `${bullishCount} از ۵ تایم‌فریم صعودی — هم‌راستایی قوی`, color: 'var(--bullish)' }
+    : bearishCount >= 4 ? { label: `${bearishCount} از ۵ تایم‌فریم نزولی — هم‌راستایی قوی`, color: 'var(--bearish)' }
+    : { label: `تایم‌فریم‌ها هم‌جهت نیستند (${bullishCount} صعودی / ${bearishCount} نزولی) — سیگنال ضعیف`, color: 'var(--neutral)' };
+
+  const dec = M.decision.decision;
+  return `
+    <div class="card">
+      <div class="card-title-row"><div class="card-title">🧭 خلاصه جامع همه تایم‌فریم‌ها</div></div>
+      <div class="table-scroll"><table class="data-table">
+        <thead><tr><th>تایم‌فریم</th><th>روند</th><th>RSI</th><th>ساختار</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border-subtle)">
+        <span class="tag" style="background:${alignment.color}22;color:${alignment.color};font-size:12px;padding:6px 12px">${alignment.label}</span>
+      </div>
+    </div>
+    <div class="decision-banner decision-${dec === 'BUY' ? 'buy' : dec === 'SELL' ? 'sell' : 'wait'}" style="padding:14px">
+      <div class="card-title" style="margin-bottom:6px">تصمیم نهایی Rule Engine</div>
+      <div class="decision-label" style="font-size:18px;color:${dec === 'BUY' ? 'var(--bullish)' : dec === 'SELL' ? 'var(--bearish)' : 'var(--neutral)'}">
+        <span>${dec === 'BUY' ? '🟢' : dec === 'SELL' ? '🔴' : '🟡'}</span><span>${dec}</span>
+      </div>
+      <div class="decision-reason" style="font-size:11.5px">${M.decision.reason}</div>
+    </div>`;
+}
+
 function renderTechnical() {
   if (!M) return `<div class="state-box">در حال بارگذاری…</div>`;
   if (M.unavailable) return unavailableCard('تحلیل تکنیکال');
   const t = M.techByTF[techTab];
   return `
     <div class="section-title">📈 تحلیل تکنیکال ${statusTag(M.status, 'style="margin-right:auto"')}</div>
+    ${buildTechnicalSummary(M)}
     <div class="tabs">${TIMEFRAMES.map(f => `<button class="tab-btn ${techTab === f ? 'active' : ''}" data-tf="${f}">${f} ${M.techByTF[f] && M.techByTF[f].source === STATUS.LIVE ? '🟢' : '⚠'}</button>`).join('')}</div>
     <div class="card">
       <div class="card-title-row"><div class="card-title">جزئیات تایم‌فریم ${techTab}</div>${statusTag(t.source || STATUS.DEMO)}</div>
