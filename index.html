@@ -1194,6 +1194,7 @@ function renderChart() {
     <div class="tabs">${TIMEFRAMES.concat(['1H']).sort((a,b)=>['15M','1H','4H','Daily','Weekly'].indexOf(a)-['15M','1H','4H','Daily','Weekly'].indexOf(b)).map(f => `<button class="tab-btn ${chartTF === f ? 'active' : ''}" data-charttf="${f}">${f}</button>`).join('')}</div>
     <div class="chart-wrap">
       <div id="chart-canvas"></div>
+      <div class="field-hint" style="margin:8px 4px 4px;font-weight:700;color:var(--gold)">RSI (14)</div>
       <div id="rsi-canvas"></div>
       <div class="chart-legend">
         <span><span class="legend-dot" style="background:var(--gold)"></span> EMA20</span>
@@ -1702,10 +1703,11 @@ async function initChart() {
     upColor: '#23c58f', downColor: '#e6495f', borderVisible: false,
     wickUpColor: '#23c58f', wickDownColor: '#e6495f'
   });
+  window.__srLines = null; // نمودار تازه ساخته شده — مرجع خط‌های قدیمی دیگر معتبر نیست
   volumeSeries = chartInstance.addHistogramSeries({
     color: '#8a93a8', priceFormat: { type: 'volume' }, priceScaleId: 'vol'
   });
-  chartInstance.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+  chartInstance.priceScale('vol').applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
   emaSeries = chartInstance.addLineSeries({ color: '#d4af37', lineWidth: 2 });
 
   const rsiChart = LightweightCharts.createChart(rsiContainer, {
@@ -1747,11 +1749,22 @@ async function loadChartData(tf, rsiSeries) {
   rsiSeries.setData(rsiPoints);
 
   const sr = calcSupportResistance(bars, 40);
+
+  // خط افقی حمایت/مقاومت مستقیم روی خود نمودار کندل — هر بار قبل از رسم، خط‌های قبلی پاک می‌شوند
+  // (وگرنه با هر تغییر تایم‌فریم، خط‌های قدیمی روی هم انباشته می‌مانند)
+  if (window.__srLines) { window.__srLines.forEach((line) => { try { candleSeries.removePriceLine(line); } catch (e) {} }); }
+  window.__srLines = [
+    candleSeries.createPriceLine({ price: sr.resistance, color: '#e6495f', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'مقاومت' }),
+    candleSeries.createPriceLine({ price: sr.support, color: '#23c58f', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'حمایت' })
+  ];
+
   const last = bars[bars.length - 1];
   if (priceBox) {
     priceBox.innerHTML = `
       <div class="stat-box"><div class="stat-label">قیمت</div><div class="stat-value">${round2(last.close)}</div></div>
       <div class="stat-box"><div class="stat-label">وضعیت</div><div class="stat-value" style="font-size:11px">${STATUS_META[ohlc.status].label}</div></div>
+      <div class="stat-box"><div class="stat-label">EMA20</div><div class="stat-value" style="color:var(--gold)">${round2(emaPoints[emaPoints.length - 1].value)}</div></div>
+      <div class="stat-box"><div class="stat-label">حجم آخرین کندل</div><div class="stat-value" style="font-size:12px">${last.volume ? Math.round(last.volume).toLocaleString() : '—'}</div></div>
       <div class="stat-box"><div class="stat-label">حمایت</div><div class="stat-value" style="color:var(--bullish)">${round2(sr.support)}</div></div>
       <div class="stat-box"><div class="stat-label">مقاومت</div><div class="stat-value" style="color:var(--bearish)">${round2(sr.resistance)}</div></div>`;
   }
