@@ -1172,6 +1172,7 @@ function renderDashboard() {
   const dec = M.decision.decision;
   return `
     <div class="quick-links">
+      <button class="quick-link" data-page="today"><span class="ql-emoji">🗓️</span><span class="ql-label">برنامه امروز</span></button>
       <button class="quick-link" data-page="chart"><span class="ql-emoji">📈</span><span class="ql-label">نمودار زنده</span></button>
       <button class="quick-link" data-page="ai"><span class="ql-emoji">🤖</span><span class="ql-label">AI Analyst</span></button>
       <button class="quick-link" data-page="alerts"><span class="ql-emoji">🔔</span><span class="ql-label">هشدارها</span></button>
@@ -1518,6 +1519,82 @@ function renderAI() {
     <button class="btn btn-ghost" id="btn-refresh-ai">🔄 اجرای مجدد تحلیل AI</button>`;
 }
 
+function buildTodayPlan(M) {
+  const dec = M.decision;
+  const h4 = M.techByTF['4H'];
+  const newsRisk = M.newsRisk;
+
+  // آیا امروز اصلاً روز مناسبی برای معامله است؟ — این جدا از BUY/SELL/WAIT است؛
+  // حتی اگر تصمیم فعلی WAIT باشد، ممکن است «امروز» هنوز روز خوبی برای رصد بازار باشد،
+  // ولی اگر شرایط بازار (Regime نامشخص + خبر پرریسک هم‌زمان) خیلی نامساعد باشد، صریحاً هشدار می‌دهیم.
+  let dayVerdict, dayColor, dayReason;
+  if (M.regime.regime === 'TRANSITION' && newsRisk.high) {
+    dayVerdict = 'بهتره امروز فقط رصد کنی، وارد نشو';
+    dayColor = 'var(--bearish)';
+    dayReason = 'بازار در وضعیت گذار (نامشخص) است و هم‌زمان یک خبر اقتصادی مهم هم نزدیک است — ترکیب پرریسکی برای ورود.';
+  } else if (newsRisk.high) {
+    dayVerdict = 'با احتیاط — خبر مهم نزدیک است';
+    dayColor = 'var(--neutral)';
+    dayReason = newsRisk.label + ' — تا بعد از انتشار و تثبیت مجدد بازار صبر کن.';
+  } else if (M.regime.regime === 'TRANSITION') {
+    dayVerdict = 'با احتیاط — بازار جهت مشخصی ندارد';
+    dayColor = 'var(--neutral)';
+    dayReason = 'رژیم بازار در حال گذار است؛ سیگنال‌های امروز ممکن است قابل‌اعتماد نباشند.';
+  } else if (dec.decision === 'BUY' || dec.decision === 'SELL') {
+    dayVerdict = 'بله، امروز شرایط ورود فراهم است';
+    dayColor = 'var(--bullish)';
+    dayReason = dec.reason;
+  } else {
+    dayVerdict = 'هنوز نه — منتظر یک سیگنال واضح‌تر باش';
+    dayColor = 'var(--neutral)';
+    dayReason = dec.reason;
+  }
+
+  let planBlock = '';
+  if (dec.decision === 'BUY' || dec.decision === 'SELL') {
+    const rr = structuralRR(M.techByTF, dec.decision);
+    planBlock = `
+      <div class="stat-grid" style="margin-top:12px">
+        <div class="stat-box"><div class="stat-label">جهت</div><div class="stat-value" style="color:${dec.decision === 'BUY' ? 'var(--bullish)' : 'var(--bearish)'}">${dec.decision === 'BUY' ? 'خرید' : 'فروش'}</div></div>
+        <div class="stat-box"><div class="stat-label">نقطه ورود</div><div class="stat-value">${round2(rr.entry)}</div></div>
+        <div class="stat-box"><div class="stat-label">حد ضرر</div><div class="stat-value" style="color:var(--bearish)">${round2(rr.sl)}</div></div>
+        <div class="stat-box"><div class="stat-label">هدف</div><div class="stat-value" style="color:var(--bullish)">${round2(rr.target)}</div></div>
+        <div class="stat-box"><div class="stat-label">ریسک/ریوارد</div><div class="stat-value">1:${rr.rr.toFixed(2)}</div></div>
+        <div class="stat-box"><div class="stat-label">Hunter Score</div><div class="stat-value">${M.hunterScore}/10</div></div>
+      </div>
+      <div class="field-hint" style="margin-top:10px">⚠ این اعداد لحظه‌ای‌اند و با تغییر بازار عوض می‌شوند — قبل از ورود واقعی، دوباره اپ را باز کن و مطمئن شو هنوز همین شرایط برقرار است. حجم پوزیشن را از «مدیریت ریسک» محاسبه کن.</div>`;
+  } else {
+    planBlock = `<div class="field-hint" style="margin-top:10px">وقتی سیگنال BUY یا SELL صادر شود، نقطه ورود/حد ضرر/هدف دقیق همین‌جا نمایش داده می‌شود.</div>`;
+  }
+
+  return { dayVerdict, dayColor, dayReason, planBlock };
+}
+
+function renderTodayPlan() {
+  if (!M) return `<div class="state-box">در حال بارگذاری…</div>`;
+  if (M.unavailable) return backRow('برنامه امروز') + unavailableCard('برنامه امروز');
+  const plan = buildTodayPlan(M);
+  return `${backRow('برنامه امروز')}
+    <div class="section-title">🗓️ آیا امروز روز معامله است؟</div>
+    <div class="card" style="border-color:${plan.dayColor}55">
+      <div style="font-size:16px;font-weight:800;color:${plan.dayColor};margin-bottom:8px">${plan.dayVerdict}</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);line-height:1.9">${plan.dayReason}</div>
+      ${plan.planBlock}
+    </div>
+    <div class="card">
+      <div class="card-title-row"><div class="card-title">وضعیت بازار امروز</div></div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="stat-label">قیمت لحظه‌ای</div><div class="stat-value">${round2(M.quote.price)}</div></div>
+        <div class="stat-box"><div class="stat-label">رژیم بازار</div><div class="stat-value" style="font-size:12px">${M.regime.label}</div></div>
+        <div class="stat-box"><div class="stat-label">حمایت روزانه</div><div class="stat-value" style="color:var(--bullish)">${round2(M.techByTF['Daily'].support)}</div></div>
+        <div class="stat-box"><div class="stat-label">مقاومت روزانه</div><div class="stat-value" style="color:var(--bearish)">${round2(M.techByTF['Daily'].resistance)}</div></div>
+        <div class="stat-box"><div class="stat-label">ریسک خبری</div><div class="stat-value" style="font-size:11px">${M.newsRisk.label}</div></div>
+        <div class="stat-box"><div class="stat-label">وضعیت داده</div><div class="stat-value" style="font-size:11px">${STATUS_META[M.status].label}</div></div>
+      </div>
+    </div>
+    <button class="btn btn-ghost" id="btn-refresh-today" style="margin-top:4px">🔄 به‌روزرسانی</button>`;
+}
+
 function renderAlerts() {
   if (!M) return `<div class="state-box">در حال بارگذاری…</div>`;
   if (M.unavailable) return backRow('هشدارها') + unavailableCard('هشدارها');
@@ -1705,6 +1782,7 @@ async function render() {
     else if (currentPage === 'chart') { el.innerHTML = renderChart(); initChart(); }
     else if (currentPage === 'ai') { el.innerHTML = renderAI(); if (!aiState.result && !aiState.loading) loadAI(); }
     else if (currentPage === 'alerts') el.innerHTML = renderAlerts();
+    else if (currentPage === 'today') el.innerHTML = renderTodayPlan();
     else if (currentPage === 'backtest') { el.innerHTML = renderBacktest(backtestCache, backtestIsDemo); if (!backtestCache) runBacktestNow(); }
 
     document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === currentPage));
