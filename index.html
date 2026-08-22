@@ -234,6 +234,8 @@ class DataProvider {
   async getQuote(symbol) { throw new Error('not implemented'); }
   async getOHLC(symbol, timeframe, limit) { throw new Error('not implemented'); }
   async getEconomicCalendar() { throw new Error('not implemented'); }
+  async getFundamentals() { return { status: STATUS.UNAVAILABLE, error: 'not-supported-by-this-provider', indicators: {} }; }
+  async getNews() { return { status: STATUS.UNAVAILABLE, error: 'not-supported-by-this-provider', articles: [] }; }
 }
 
 // ---- DEMO Provider: داده تصادفیِ سیدشده (Seeded) — هرگز ادعای Live ندارد ----
@@ -334,6 +336,22 @@ class DemoDataProvider extends DataProvider {
       hoursToNextHighImpact: 6.5
     };
   }
+  async getFundamentals() {
+    // مقادیر نمونه — فقط برای نمایش ساختار کارت‌ها؛ هرگز به‌عنوان Live جا زده نمی‌شود
+    return {
+      status: STATUS.DEMO,
+      indicators: {
+        fedFundsRate: { status: STATUS.DEMO, label: 'نرخ بهره فدرال رزرو', unit: '%', value: 3.63, date: null, previousValue: 3.88, previousDate: null, change: -0.25 },
+        unemploymentRate: { status: STATUS.DEMO, label: 'نرخ بیکاری', unit: '%', value: 4.3, date: null, previousValue: 4.2, previousDate: null, change: 0.1 },
+        cpi: { status: STATUS.DEMO, label: 'CPI (شاخص)', unit: '', value: 315.6, date: null, previousValue: 314.8, previousDate: null, change: 0.8 },
+        coreCpi: { status: STATUS.DEMO, label: 'Core CPI (شاخص)', unit: '', value: 322.1, date: null, previousValue: 321.5, previousDate: null, change: 0.6 },
+        nonfarmPayroll: { status: STATUS.DEMO, label: 'اشتغال غیرکشاورزی (هزار نفر)', unit: 'K', value: 158420, date: null, previousValue: 158280, previousDate: null, change: 140 }
+      }
+    };
+  }
+  async getNews() {
+    return { status: STATUS.DEMO, articles: [] };
+  }
 }
 
 // ---- REST Provider: اتصال واقعی از طریق Backend Proxy (پوشه /server) ----
@@ -360,6 +378,8 @@ class RestApiDataProvider extends DataProvider {
     return this._get(`/api/market/ohlc?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=${limit || 200}`);
   }
   async getEconomicCalendar() { return this._get('/api/calendar'); }
+  async getFundamentals() { return this._get('/api/fundamentals'); }
+  async getNews() { return this._get('/api/news'); }
 }
 
 // ---- XAUS Provider: اتصال ساده و مستقیم از مرورگر — بدون کلید، بدون سرور واسط ----
@@ -667,24 +687,45 @@ function evaluateNewsRisk(calendarResult) {
 }
 
 // =========================== 7. FUNDAMENTAL ENGINE ===========================
-function evaluateFundamental(events) {
+function evaluateFundamental(events, indicators) {
   const released = events.filter(e => e.a !== '—');
   let bullish = 0, bearish = 0, neutral = 0;
   released.forEach(e => {
     const p = parseFloat(e.p), a = parseFloat(e.a);
     if (isNaN(p) || isNaN(a)) { neutral++; return; }
     // قانون ساده و شفاف: داده تورمی/اشتغال بالاتر از انتظار => فشار بر طلا (Bearish)، پایین‌تر => Bullish
-    const inflationLike = /CPI|PPI|PCE|NFP|Fed|فدرال|DXY|US10Y/i.test(e.t);
+    const inflationLike = /CPI|PPI|PCE|NFP|Fed|فدرال|DXY|US10Y|تورم|بیکاری|اشتغال/i.test(e.t);
     if (!inflationLike) { neutral++; return; }
     if (a < p) bullish++; else if (a > p) bearish++; else neutral++;
   });
-  const total = Math.max(1, bullish + bearish + neutral);
-  const score = Math.round(((bullish * 10 + neutral * 5 + bearish * 1) / total / 10) * 100) / 10;
-  const bias = bullish > bearish ? 'bullish' : bearish > bullish ? 'bearish' : 'neutral';
   const reasons = [];
   if (bullish > 0) reasons.push(`${bullish} رویداد اقتصادی منتشرشده پایین‌تر از پیش‌بینی بوده که برای طلا Bullish تلقی می‌شود.`);
   if (bearish > 0) reasons.push(`${bearish} رویداد اقتصادی منتشرشده بالاتر از پیش‌بینی بوده که برای طلا Bearish تلقی می‌شود.`);
   if (released.length < events.length) reasons.push(`${events.length - released.length} رویداد هنوز منتشر نشده (Actual: —) و در امتیاز فاندامنتال لحاظ نشده است.`);
+
+  // شاخص‌های واقعی FRED (نرخ بهره، بیکاری، تورم) — قوانین ساده و شفاف:
+  // کاهش نرخ بهره یا افزایش بیکاری = گرایش به سیاست انبساطی فدرال رزرو => Bullish برای طلا
+  // افزایش نرخ بهره یا کاهش بیکاری = گرایش انقباضی => Bearish برای طلا
+  // شتاب‌گیری تورم (CPI/Core CPI) = ریسک سیاست انقباضی => Bearish؛ کندشدن تورم => Bullish
+  if (indicators) {
+    const fr = indicators.fedFundsRate, un = indicators.unemploymentRate, cpi = indicators.cpi, coreCpi = indicators.coreCpi;
+    if (fr && fr.change != null) {
+      if (fr.change < 0) { bullish++; reasons.push(`نرخ بهره فدرال رزرو ${Math.abs(fr.change)} واحد کاهش یافته (به ${fr.value}%) — سیگنال انبساطی، Bullish برای طلا.`); }
+      else if (fr.change > 0) { bearish++; reasons.push(`نرخ بهره فدرال رزرو ${fr.change} واحد افزایش یافته (به ${fr.value}%) — سیگنال انقباضی، Bearish برای طلا.`); }
+    }
+    if (un && un.change != null) {
+      if (un.change > 0) { bullish++; reasons.push(`نرخ بیکاری به ${un.value}% رسیده (افزایش) — احتمال سیاست انبساطی‌تر فدرال رزرو، Bullish برای طلا.`); }
+      else if (un.change < 0) { bearish++; reasons.push(`نرخ بیکاری به ${un.value}% رسیده (کاهش) — بازار کار قوی، Bearish برای طلا.`); }
+    }
+    if (cpi && coreCpi && cpi.change != null && coreCpi.change != null) {
+      if (coreCpi.change > cpi.change) { bearish++; reasons.push(`Core CPI سریع‌تر از CPI عمومی در حال رشد است — ریسک تورمی، Bearish برای طلا.`); }
+      else { bullish++; }
+    }
+  }
+
+  const total = Math.max(1, bullish + bearish + neutral);
+  const score = Math.round(((bullish * 10 + neutral * 5 + bearish * 1) / total / 10) * 100) / 10;
+  const bias = bullish > bearish ? 'bullish' : bearish > bullish ? 'bearish' : 'neutral';
   if (!reasons.length) reasons.push('داده اقتصادی کافی برای نتیجه‌گیری قطعی منتشر نشده است.');
   return { bias, score, reasons };
 }
@@ -1014,8 +1055,12 @@ async function buildMarketState() {
       .then((ohlc) => ({ tf, ohlc }))
   );
   const calendarPromise = safeCall(() => provider.getEconomicCalendar(), 'calendar');
+  const fundamentalsPromise = safeCall(() => provider.getFundamentals(), 'fundamentals');
+  const newsPromise = safeCall(() => provider.getNews(), 'news');
 
-  let [quote, ohlcResults, calendarResult] = await Promise.all([quotePromise, Promise.all(ohlcPromises), calendarPromise]);
+  let [quote, ohlcResults, calendarResult, fundamentalsResult, newsResult] = await Promise.all([
+    quotePromise, Promise.all(ohlcPromises), calendarPromise, fundamentalsPromise, newsPromise
+  ]);
 
   let quoteError = null;
   // اگر هر یک از دو حالت اتصال (ساده یا Backend Proxy کامل) فعال است ولی خود قیمت لحظه‌ای شکست خورد
@@ -1058,6 +1103,8 @@ async function buildMarketState() {
   // نبود آن به‌تنهایی نباید کل داشبورد (قیمت/تکنیکال که ممکن است کاملاً Live باشند) را غیرفعال کند —
   // فقط خود تب فاندامنتال با تگ DEMO مشخص می‌شود.
   if (calendarResult.status === STATUS.UNAVAILABLE) calendarResult = await demoProvider.getEconomicCalendar();
+  if (fundamentalsResult.status === STATUS.UNAVAILABLE) fundamentalsResult = await demoProvider.getFundamentals();
+  if (newsResult.status === STATUS.UNAVAILABLE) newsResult = await demoProvider.getNews();
 
   if (unavailable || Object.keys(techByTF).length < TIMEFRAMES.length) {
     return { unavailable: true, status: STATUS.UNAVAILABLE, quote, calendarResult, quoteError, usingProxy: settings.useLive && settings.apiBaseUrl };
@@ -1067,14 +1114,14 @@ async function buildMarketState() {
   const breakout = evaluateBreakout(techByTF, techByTF['Daily'].resistance);
   const range = evaluateRange(techByTF);
   const newsRisk = evaluateNewsRisk(calendarResult);
-  const fundamental = evaluateFundamental(calendarResult.events || []);
+  const fundamental = evaluateFundamental(calendarResult.events || [], fundamentalsResult.indicators || null);
   const decision = runRuleEngine({ techByTF, regime, breakout, range, newsRisk, fundamental });
   const hunter = calcHunterScore({ techByTF, regime, decision, newsRisk, fundamental }, settings.weights);
 
   return {
     unavailable: false, status: dataStatus, quote, techByTF, regime, breakout, range,
     newsRisk, fundamental, decision, scores: hunter.scores, hunterScore: hunter.hunterScore,
-    calendarResult, technicalIsDemo, quoteError,
+    calendarResult, fundamentalsResult, newsResult, technicalIsDemo, quoteError,
     providerIsLive: (settings.useLive && settings.apiBaseUrl) || !!simpleQuoteProvider
   };
 }
@@ -1331,10 +1378,30 @@ function renderFundamental() {
   if (!M) return `<div class="state-box">در حال بارگذاری…</div>`;
   if (M.unavailable) return unavailableCard('تحلیل فاندامنتال');
   const events = M.calendarResult.events || [];
+  const indicators = (M.fundamentalsResult && M.fundamentalsResult.indicators) || {};
+  const indicatorKeys = Object.keys(indicators);
+  const news = (M.newsResult && M.newsResult.articles) || [];
   return `
     <div class="section-title">🌍 تحلیل فاندامنتال ${statusTag(M.calendarResult.status, 'style="margin-right:auto"')}</div>
+    ${indicatorKeys.length ? `
     <div class="card">
-      <div class="card-title-row"><div class="card-title">داده‌های کلان اقتصادی</div></div>
+      <div class="card-title-row"><div class="card-title">شاخص‌های کلان (FRED)</div>${statusTag(M.fundamentalsResult.status)}</div>
+      <div class="stat-grid">
+        ${indicatorKeys.map((k) => {
+          const ind = indicators[k];
+          if (ind.status === STATUS.UNAVAILABLE) return `<div class="stat-box"><div class="stat-label">${ind.label}</div><div class="stat-value" style="font-size:11px;color:var(--text-muted)">در دسترس نیست</div></div>`;
+          const changeColor = ind.change > 0 ? 'var(--bearish)' : ind.change < 0 ? 'var(--bullish)' : 'var(--text-muted)';
+          return `<div class="stat-box">
+            <div class="stat-label">${ind.label}${ind.date ? ` <span style="opacity:.6">(${ind.date})</span>` : ''}</div>
+            <div class="stat-value">${round2(ind.value)}${ind.unit}</div>
+            ${ind.change != null ? `<div class="mono" style="font-size:10.5px;color:${changeColor};margin-top:3px">${ind.change > 0 ? '▲' : ind.change < 0 ? '▼' : '—'} ${Math.abs(ind.change)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="field-hint" style="margin-top:10px">منبع: FRED (پایگاه رسمی فدرال‌رزرو آمریکا) — همیشه رایگان و بدون تحریف.</div>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-title-row"><div class="card-title">داده‌های کلان اقتصادی (تقویم)</div></div>
       <div class="table-scroll"><table class="data-table"><thead><tr><th>رویداد</th><th>تاریخ</th><th>قبلی</th><th>پیش‌بینی</th><th>واقعی</th></tr></thead>
       <tbody>${events.map(e => `<tr><td>${e.t}</td><td class="mono" style="font-size:10.5px">${e.d}</td><td class="mono">${e.p}</td><td class="mono">${e.f}</td><td class="mono">${e.a}</td></tr>`).join('')}</tbody></table></div>
     </div>
@@ -1348,6 +1415,19 @@ function renderFundamental() {
         ${M.fundamental.reasons.map(r => `<li>${r}</li>`).join('')}
       </ul>
     </div>
+    ${news.length ? `
+    <div class="card">
+      <div class="card-title-row"><div class="card-title">📰 خبرهای مرتبط با طلا</div>${statusTag(M.newsResult.status)}</div>
+      <div class="field-hint" style="margin-bottom:10px">⚠ برچسب‌ها فقط بر اساس چند کلمه کلیدی هستند، نه تحلیل هوش مصنوعی واقعی — خود خبر را بخوان و خودت قضاوت کن.</div>
+      ${news.map((a) => `
+        <div style="padding:10px 0;border-bottom:1px solid var(--border-subtle)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px">
+            <a href="${a.url}" target="_blank" rel="noopener" style="font-size:12px;font-weight:600;color:var(--text-primary);text-decoration:none;line-height:1.6">${a.headline}</a>
+            <span class="tag ${a.tag === 'bullish' ? 'tag-bullish' : a.tag === 'bearish' ? 'tag-bearish' : 'tag-neutral'}" style="flex-shrink:0">${a.tag === 'bullish' ? '🟢' : a.tag === 'bearish' ? '🔴' : '🟡'}</span>
+          </div>
+          <div class="journal-meta"><span>${a.source}</span>${a.datetime ? `<span class="mono">${new Date(a.datetime).toLocaleDateString('fa-IR')}</span>` : ''}</div>
+        </div>`).join('')}
+    </div>` : ''}
     <div class="section-title">🔮 سناریوهای احتمالی بازار</div>
     ${buildScenarios(M)}
     <div class="card">
