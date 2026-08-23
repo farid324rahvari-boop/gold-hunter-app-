@@ -1516,7 +1516,9 @@ function renderAI() {
       </div>
     </div>
     ${buildScenarios(M)}
-    <button class="btn btn-ghost" id="btn-refresh-ai">🔄 اجرای مجدد تحلیل AI</button>`;
+    <button class="btn btn-ghost" id="btn-refresh-ai">🔄 اجرای مجدد تحلیل AI</button>
+    <button class="btn btn-ghost btn-sm" id="btn-diagnose-ai" style="margin-top:10px">🔍 تست اتصال AI و نمایش پاسخ خام</button>
+    <div id="ai-diagnose-box"></div>`;
 }
 
 function buildTodayPlan(M) {
@@ -2013,6 +2015,35 @@ function bindPageEvents() {
   };
   const refreshAiBtn = document.getElementById('btn-refresh-ai');
   if (refreshAiBtn) refreshAiBtn.onclick = () => { aiState.result = null; loadAI(); };
+  const diagnoseAiBtn = document.getElementById('btn-diagnose-ai');
+  if (diagnoseAiBtn) diagnoseAiBtn.onclick = async () => {
+    const box = document.getElementById('ai-diagnose-box');
+    box.innerHTML = `<div class="field-hint" style="margin-top:10px">در حال تست اتصال...</div>`;
+    if (!settings.useLive || !settings.apiBaseUrl) {
+      box.innerHTML = `<div class="field-hint" style="margin-top:10px;color:var(--bearish)">اتصال پیشرفته (Backend Proxy) فعال نیست یا آدرسی تنظیم نشده — برو تنظیمات و فعالش کن.</div>`;
+      return;
+    }
+    const t0 = performance.now();
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20000);
+      const r = await fetch(settings.apiBaseUrl.replace(/\/$/, '') + '/api/ai/analyze', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: buildAIPayload(M) }), signal: ctrl.signal
+      });
+      clearTimeout(timer);
+      const t1 = performance.now();
+      const data = await r.json().catch(() => ({ parseError: true }));
+      const ok = r.ok && data.status === STATUS.LIVE;
+      box.innerHTML = `<div class="field-hint" style="margin-top:10px">
+        <b>POST /api/ai/analyze</b> — ${Math.round(t1 - t0)}ms — HTTP ${r.status} — ${ok ? '<span style="color:var(--bullish)">موفق ✓</span>' : '<span style="color:var(--bearish)">شکست ✗</span>'}<br>
+        <pre style="white-space:pre-wrap;word-break:break-all;font-size:10px;line-height:1.6;margin-top:6px">${JSON.stringify(data, null, 1).slice(0, 800)}</pre>
+        این پاسخ خام رو کپی کن و برام بفرست تا دقیق بفهمم مشکل کجاست.
+      </div>`;
+    } catch (e) {
+      box.innerHTML = `<div class="field-hint" style="margin-top:10px;color:var(--bearish)">خطا: ${e.message}</div>`;
+    }
+  };
   const rerunBacktestBtn = document.getElementById('btn-rerun-backtest');
   if (rerunBacktestBtn) rerunBacktestBtn.onclick = () => { backtestCache = null; demoProvider.regenerate(); runBacktestNow(); render(); };
   const retryBtn = document.getElementById('btn-retry-connection');
