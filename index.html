@@ -866,7 +866,7 @@ async function getAIAnalysis(state, apiBaseUrl) {
   if (!apiBaseUrl) return { status: STATUS.DEMO, narrative: localAINarrative(state), source: 'Rule-Based Local Synthesis' };
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const timer = setTimeout(() => ctrl.abort(), 45000);
     const r = await fetch(apiBaseUrl.replace(/\/$/, '') + '/api/ai/analyze', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state: buildAIPayload(state) }), signal: ctrl.signal
