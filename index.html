@@ -777,7 +777,8 @@ function runRuleEngine(state) {
   checklist.push(`فاصله تا مقاومت کلیدی روزانه: ${distToResistance.toFixed(2)}%`);
   checklist.push(`فاصله تا حمایت کلیدی روزانه: ${distToSupport.toFixed(2)}%`);
 
-  if (range.isMidRange) { block = 'قیمت در میانه محدوده رنج (Mid Range) قرار دارد — ورود در این ناحیه ممنوع است.'; }
+  // ---- محافظ‌های قطعی سرمایه — این‌ها هرگز به امتیاز تبدیل نمی‌شوند، چون مستقیماً از ضرر بزرگ جلوگیری می‌کنند ----
+  if (range.isMidRange) block = 'قیمت در میانه محدوده رنج (Mid Range) قرار دارد — ورود در این ناحیه ممنوع است.';
 
   const rrBuy = structuralRR(techByTF, 'BUY');
   const rrSell = structuralRR(techByTF, 'SELL');
@@ -789,34 +790,63 @@ function runRuleEngine(state) {
     else if (regime.regime === 'RANGE') candidate = range.position > 0.85 ? 'SELL_RANGE' : range.position < 0.15 ? 'BUY_RANGE' : null;
   }
 
-  if (!block && candidate === 'BUY') {
-    if (distToResistance < 0.6) block = 'قیمت بیش از حد به مقاومت مهم نزدیک است — ریسک برخورد به مقاومت بالاست.';
-    else if (!breakout.confirmed && distToResistance < 1.5) block = 'شکست معتبر مقاومت هنوز تأیید نشده (' + breakout.progress + ' مرحله) — تا تکمیل مراحل Breakout، خرید مجاز نیست.';
-    else if (techByTF['1H'] && techByTF['1H'].trendKey === 'DOWN') block = 'روند میان‌مدت ۱ساعته با خرید هم‌راستا نیست — تأیید ۱H لازم است.';
-    else if (techByTF['1H'] && techByTF['1H'].structure.choch) block = 'تغییر ساختار (CHoCH) در تایم‌فریم ۱ساعته شناسایی شد — تا تثبیت مجدد ساختار، خرید مجاز نیست.';
-    else if (rrBuy.rr < CONFIG.MIN_ACCEPTABLE_RR) block = `نسبت ریسک به ریوارد ساختاری (1:${rrBuy.rr.toFixed(2)}) کمتر از حداقل قابل قبول (1:${CONFIG.MIN_ACCEPTABLE_RR}) است.`;
-    else if (newsRisk.high) block = 'خبر اقتصادی مهم نزدیک است و ریسک نوسان بالاست — ورود توصیه نمی‌شود یا باید حجم کاهش یابد.';
+  if (!block && (candidate === 'BUY' || candidate === 'BUY_RANGE') && distToResistance < 0.6) {
+    block = 'قیمت بیش از حد به مقاومت مهم نزدیک است — ریسک برخورد به مقاومت بالاست.';
   }
-  if (!block && candidate === 'SELL') {
-    if (distToSupport < 0.6) block = 'قیمت بیش از حد به حمایت مهم نزدیک است — ریسک برخورد به حمایت بالاست.';
-    else if (techByTF['1H'] && techByTF['1H'].trendKey === 'UP') block = 'روند میان‌مدت ۱ساعته با فروش هم‌راستا نیست — تأیید ۱H لازم است.';
-    else if (techByTF['1H'] && techByTF['1H'].structure.choch) block = 'تغییر ساختار (CHoCH) در تایم‌فریم ۱ساعته شناسایی شد — تا تثبیت مجدد ساختار، فروش مجاز نیست.';
-    else if (rrSell.rr < CONFIG.MIN_ACCEPTABLE_RR) block = `نسبت ریسک به ریوارد ساختاری (1:${rrSell.rr.toFixed(2)}) کمتر از حداقل قابل قبول (1:${CONFIG.MIN_ACCEPTABLE_RR}) است.`;
-    else if (newsRisk.high) block = 'خبر اقتصادی مهم نزدیک است و ریسک نوسان بالاست — ورود توصیه نمی‌شود یا باید حجم کاهش یابد.';
+  if (!block && (candidate === 'SELL' || candidate === 'SELL_RANGE') && distToSupport < 0.6) {
+    block = 'قیمت بیش از حد به حمایت مهم نزدیک است — ریسک برخورد به حمایت بالاست.';
   }
-  if (!block && candidate === 'BUY_RANGE' && !breakout.confirmed) block = 'در حالت رنج، بدون شکست معتبر کف/سقف، ورود صادر نمی‌شود.';
-  if (!block && candidate === 'SELL_RANGE' && !breakout.confirmed) block = 'در حالت رنج، بدون شکست معتبر کف/سقف، ورود صادر نمی‌شود.';
+  const side = candidate === 'SELL' || candidate === 'SELL_RANGE' ? 'SELL' : 'BUY';
+  const rr = side === 'SELL' ? rrSell : rrBuy;
+  if (!block && candidate && rr.rr < CONFIG.MIN_ACCEPTABLE_RR) {
+    block = `نسبت ریسک به ریوارد ساختاری (1:${rr.rr.toFixed(2)}) کمتر از حداقل قابل قبول (1:${CONFIG.MIN_ACCEPTABLE_RR}) است.`;
+  }
+
+  // ---- از این‌جا به بعد: امتیاز وزنی چند عامل، نه مانع قطعی — یک عامل ضعیف به‌تنهایی جلوی ورود را نمی‌گیرد ----
+  let score = 0, maxScore = 0, scoreNotes = [];
+  function addScore(points, weight, label) {
+    maxScore += weight;
+    score += points * weight;
+    scoreNotes.push(`${label}: ${points >= 0.66 ? '✓ مثبت' : points >= 0.34 ? '◐ خنثی' : '✗ منفی'}`);
+  }
+  if (!block && candidate) {
+    const h1 = techByTF['1H'];
+    // ۱. Breakout — حالا امتیاز پلکانی بر اساس مراحل تکمیل‌شده، نه فقط تمام/هیچ
+    const breakoutProgressRatio = breakout.stages.filter(s => s.done).length / breakout.stages.length;
+    const nearMajorLevel = (side === 'BUY' && distToResistance < 1.5) || (side === 'SELL' && distToSupport < 1.5);
+    addScore(nearMajorLevel ? breakoutProgressRatio : 1, 0.3, 'شکست/تثبیت سطح کلیدی');
+    // ۲. هم‌راستایی روند میان‌مدت ۱ساعته
+    const h1Aligned = !h1 || (side === 'BUY' ? h1.trendKey !== 'DOWN' : h1.trendKey !== 'UP');
+    addScore(h1Aligned ? 1 : 0.25, 0.25, 'هم‌راستایی روند ۱ساعته');
+    // ۳. ساختار بازار (CHoCH اخیر یعنی احتمال تغییر ساختار)
+    const structureOk = !h1 || !h1.structure.choch;
+    addScore(structureOk ? 1 : 0.3, 0.2, 'ثبات ساختار بازار (بدون CHoCH)');
+    // ۴. ریسک خبری
+    addScore(newsRisk.high ? 0.2 : 1, 0.15, 'ریسک خبری پایین');
+    // ۵. مومنتوم RSI هم‌راستا با جهت معامله
+    const rsiOk = side === 'BUY' ? h4.rsi > 45 : h4.rsi < 55;
+    addScore(rsiOk ? 1 : 0.4, 0.1, 'هم‌راستایی مومنتوم RSI');
+  }
+  const confidencePct = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+  const CONFIDENCE_THRESHOLD = 60;
 
   let decision = 'WAIT', reason;
-  if (block) { reason = block; }
-  else if (candidate === 'BUY' || candidate === 'BUY_RANGE') { decision = 'BUY'; reason = 'روند، ساختار چندتایم‌فریمی، Breakout، ریسک/ریوارد و ریسک خبری همگی شرایط ورود خرید را تأیید می‌کنند.'; }
-  else if (candidate === 'SELL' || candidate === 'SELL_RANGE') { decision = 'SELL'; reason = 'روند، ساختار چندتایم‌فریمی، ریسک/ریوارد و ریسک خبری شرایط ورود فروش را تأیید می‌کنند.'; }
-  else { reason = 'هم‌راستایی کافی بین تایم‌فریم‌ها یا سیگنال ورود مشخصی وجود ندارد — بهترین اقدام، صبر کردن است.'; }
+  if (block) {
+    reason = block;
+  } else if (candidate && confidencePct >= CONFIDENCE_THRESHOLD) {
+    decision = side;
+    reason = `چند عامل هم‌زمان (Breakout، هم‌راستایی ۱ساعته، ساختار بازار، ریسک خبری، مومنتوم) با امتیاز اطمینان ${confidencePct}٪ شرایط ورود ${side === 'BUY' ? 'خرید' : 'فروش'} را تأیید می‌کنند.`;
+  } else if (candidate) {
+    reason = `سیگنال ${side === 'BUY' ? 'خرید' : 'فروش'} وجود دارد ولی امتیاز اطمینان (${confidencePct}٪) کمتر از حد قابل قبول (${CONFIDENCE_THRESHOLD}٪) است — ${scoreNotes.filter(n => n.includes('منفی')).join('، ') || 'برخی عوامل ضعیف‌اند'}.`;
+  } else {
+    reason = 'هم‌راستایی کافی بین تایم‌فریم‌ها یا سیگنال ورود مشخصی وجود ندارد — بهترین اقدام، صبر کردن است.';
+  }
 
   return {
     decision, reason, checklist,
     rr: decision === 'SELL' ? rrSell.rr : rrBuy.rr,
-    distToResistance, distToSupport
+    distToResistance, distToSupport,
+    confidencePct: (!block && candidate) ? confidencePct : null, scoreNotes: (!block && candidate) ? scoreNotes : []
   };
 }
 
@@ -838,24 +868,47 @@ function clamp10(v) { return Math.max(0, Math.min(10, Math.round(v * 10) / 10));
 // =========================== 11. AI ANALYST LAYER ===========================
 // AI هرگز قیمت تولید نمی‌کند؛ فقط ورودی ساختاریافته موتورهای بالا را دریافت و تفسیر می‌کند.
 function buildAIPayload(state) {
+  const tfKeys = ['Weekly', 'Daily', '4H', '1H', '15M'];
+  const timeframes = {};
+  tfKeys.forEach((k) => { if (state.techByTF[k]) timeframes[k] = summarizeTF(state.techByTF[k]); });
+
+  const fred = {};
+  if (state.fundamentalsResult && state.fundamentalsResult.indicators) {
+    Object.entries(state.fundamentalsResult.indicators).forEach(([key, v]) => {
+      if (v && v.status === 'LIVE') fred[key] = { label: v.label, value: v.value, previousValue: v.previousValue, change: v.change, date: v.date };
+    });
+  }
+
   return {
     price: state.quote.price, dataStatus: state.quote.status,
-    weekly: summarizeTF(state.techByTF['Weekly']), daily: summarizeTF(state.techByTF['Daily']),
-    h4: summarizeTF(state.techByTF['4H']), m15: summarizeTF(state.techByTF['15M']),
-    marketRegime: state.regime.regime, breakoutStatus: state.breakout.progress,
-    fakeBreakoutRisk: state.breakout.fakeRisk, rangeStatus: state.range.zone,
-    fundamentalBias: state.fundamental.bias, newsRisk: state.newsRisk.label,
-    riskReward: state.decision.rr, finalDecision: state.decision.decision
+    timeframes, // همه تایم‌فریم‌ها: روند، EMA20، RSI، ATR14، حمایت/مقاومت، ساختار بازار (BOS/CHoCH)
+    marketRegime: state.regime.regime, regimeStrength: state.regime.strength,
+    breakoutStatus: state.breakout.progress, breakoutConfirmed: state.breakout.confirmed,
+    fakeBreakoutRisk: state.breakout.fakeRisk, majorResistanceLevel: round2(state.breakout.level),
+    range: { high: round2(state.range.high), low: round2(state.range.low), mid: round2(state.range.mid), zone: state.range.zone },
+    fundamentalBias: state.fundamental.bias, fundamentalScore: state.fundamental.score, fundamentalReasons: state.fundamental.reasons,
+    macroIndicators: fred, // نرخ بهره فدرال، تورم CPI/Core CPI، بیکاری، اشتغال — از FRED واقعی
+    newsRisk: state.newsRisk.label,
+    hunterScore: state.hunterScore, subScores: state.scores,
+    riskReward: state.decision.rr, distToResistancePercent: round2(state.decision.distToResistance),
+    distToSupportPercent: round2(state.decision.distToSupport), decisionChecklist: state.decision.checklist,
+    finalDecision: state.decision.decision, finalDecisionReason: state.decision.reason
   };
 }
-function summarizeTF(t) { return { trend: t.trend, ema20: round2(t.ema20), rsi: round2(t.rsi), support: round2(t.support), resistance: round2(t.resistance) }; }
+function summarizeTF(t) {
+  return {
+    trend: t.trend, ema20: round2(t.ema20), rsi: round2(t.rsi), atr14: t.atr14 != null ? round2(t.atr14) : null,
+    support: round2(t.support), resistance: round2(t.resistance),
+    structure: t.structure ? { bias: t.structure.bias, bos: t.structure.bos, choch: t.structure.choch } : null
+  };
+}
 function round2(n) { return Math.round(n * 100) / 100; }
 
 function localAINarrative(state) {
   const p = buildAIPayload(state);
   const parts = [];
   parts.push(`قیمت فعلی ${round2(p.price)} در رژیم «${state.regime.label}» قرار دارد.`);
-  parts.push(`هم‌راستایی تایم‌فریم‌ها: Weekly ${p.weekly.trend} / Daily ${p.daily.trend} / 4H ${p.h4.trend} / 15M ${p.m15.trend}.`);
+  parts.push(`هم‌راستایی تایم‌فریم‌ها: Weekly ${p.timeframes.Weekly.trend} / Daily ${p.timeframes.Daily.trend} / 4H ${p.timeframes['4H'].trend} / 1H ${p.timeframes['1H'] ? p.timeframes['1H'].trend : '—'} / 15M ${p.timeframes['15M'].trend}.`);
   parts.push(`وضعیت Breakout: ${p.breakoutStatus} مرحله تکمیل${p.fakeBreakoutRisk ? ' — ریسک Fake Breakout شناسایی شد' : ''}.`);
   parts.push(`ریسک خبری: ${p.newsRisk}. بایاس فاندامنتال: ${p.fundamentalBias === 'bullish' ? 'صعودی' : p.fundamentalBias === 'bearish' ? 'نزولی' : 'خنثی'}.`);
   parts.push(`نتیجه Rule Engine: ${p.finalDecision}. ${state.decision.reason}`);
@@ -1210,7 +1263,11 @@ function renderDashboard() {
         <span>${dec === 'BUY' ? 'خرید (BUY)' : dec === 'SELL' ? 'فروش (SELL)' : 'صبر کن (WAIT)'}</span>
       </div>
       <div class="decision-reason">${M.decision.reason}</div>
-      <div class="decision-checklist">${M.decision.checklist.map(c => `<div>• ${c}</div>`).join('')}</div>
+      <div class="decision-checklist">
+        ${M.decision.confidencePct != null ? `<div style="font-weight:700;color:${M.decision.confidencePct >= 60 ? 'var(--bullish)' : 'var(--neutral)'}">امتیاز اطمینان: ${M.decision.confidencePct}٪</div>` : ''}
+        ${M.decision.checklist.map(c => `<div>• ${c}</div>`).join('')}
+        ${(M.decision.scoreNotes || []).map(c => `<div>• ${c}</div>`).join('')}
+      </div>
     </div>
     <div class="card">
       <div class="card-title-row"><div class="card-title">امتیاز شکارچی طلا (Hunter Score)</div></div>
