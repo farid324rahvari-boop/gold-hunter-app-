@@ -1575,7 +1575,9 @@ function renderAI() {
     ${buildScenarios(M)}
     <button class="btn btn-ghost" id="btn-refresh-ai">🔄 اجرای مجدد تحلیل AI</button>
     <button class="btn btn-ghost btn-sm" id="btn-diagnose-ai" style="margin-top:10px">🔍 تست اتصال AI و نمایش پاسخ خام</button>
-    <div id="ai-diagnose-box"></div>`;
+    <div id="ai-diagnose-box"></div>
+    <button class="btn" id="btn-send-telegram" style="margin-top:14px">📨 ارسال تحلیل فعلی به تلگرام</button>
+    <div id="telegram-send-box"></div>`;
 }
 
 function buildTodayPlan(M) {
@@ -2097,6 +2099,31 @@ function bindPageEvents() {
         <pre style="white-space:pre-wrap;word-break:break-all;font-size:10px;line-height:1.6;margin-top:6px">${JSON.stringify(data, null, 1).slice(0, 800)}</pre>
         این پاسخ خام رو کپی کن و برام بفرست تا دقیق بفهمم مشکل کجاست.
       </div>`;
+    } catch (e) {
+      box.innerHTML = `<div class="field-hint" style="margin-top:10px;color:var(--bearish)">خطا: ${e.message}</div>`;
+    }
+  };
+  const sendTelegramBtn = document.getElementById('btn-send-telegram');
+  if (sendTelegramBtn) sendTelegramBtn.onclick = async () => {
+    const box = document.getElementById('telegram-send-box');
+    box.innerHTML = `<div class="field-hint" style="margin-top:10px">در حال ارسال به تلگرام...</div>`;
+    if (!settings.useLive || !settings.apiBaseUrl) {
+      box.innerHTML = `<div class="field-hint" style="margin-top:10px;color:var(--bearish)">اتصال پیشرفته (Backend Proxy) فعال نیست — برو تنظیمات و فعالش کن.</div>`;
+      return;
+    }
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 25000);
+      const r = await fetch(settings.apiBaseUrl.replace(/\/$/, '') + '/api/auto-alert/send-now', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal
+      });
+      clearTimeout(timer);
+      const data = await r.json().catch(() => ({}));
+      if (data.ok && data.sent) {
+        box.innerHTML = `<div class="field-hint" style="margin-top:10px;color:var(--bullish)">✓ تحلیل فعلی (${data.decision || '—'}) به تلگرام ارسال شد.</div>`;
+      } else {
+        box.innerHTML = `<div class="field-hint" style="margin-top:10px;color:var(--bearish)">ارسال نشد: ${data.error || 'خطای نامشخص'}</div>`;
+      }
     } catch (e) {
       box.innerHTML = `<div class="field-hint" style="margin-top:10px;color:var(--bearish)">خطا: ${e.message}</div>`;
     }
