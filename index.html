@@ -1508,7 +1508,7 @@ function buildScenarios(M) {
   const rangeP = Math.max(10, 100 - bullP - bearP);
   const scenarios = {
     bullish: { p: bullP, trigger: `بسته‌شدن معتبر بالای مقاومت ${round2(d.resistance)} همراه با تأیید حجم و RSI بالای ۵۰`, inv: `بازگشت زیر ${round2(h4.support)} در ۴ساعته`, entry: round2(d.resistance) + 5, sl: round2(h4.support), t1: round2(d.resistance + (d.resistance - d.support) * .2), t2: round2(d.resistance + (d.resistance - d.support) * .4), t3: round2(d.resistance + (d.resistance - d.support) * .7) },
-    bearish: { p: bearP, trigger: `رد شدن مجدد از مقاومت ${round2(d.resistance)} همراه با کندل بازگشتی قوی`, inv: `شکست معتبر و تثبیت بالای ${round2(d.resistance)}`, entry: round2(h4.resistance), sl: round2(d.resistance) + 10, t1: round2(h4.support), t2: round2(d.support + (d.resistance - d.support) * .2), t3: round2(d.support) },
+    bearish: { p: bearP, trigger: `رد شدن مجدد از مقاومت ${round2(d.resistance)} همراه با کندل بازگشتی قوی`, inv: `شکست معتبر و تثبیت بالای ${round2(d.resistance)}`, entry: round2(h4.resistance), sl: round2(d.resistance) + 10, t1: round2(h4.resistance - (h4.resistance - d.support) * .3), t2: round2(h4.resistance - (h4.resistance - d.support) * .65), t3: round2(d.support) },
     range: { p: rangeP, trigger: `نوسان بین ${round2(M.range.low)} تا ${round2(M.range.high)} بدون شکست معتبر`, inv: 'شکست معتبر هر مرز رنج همراه با تأیید', entry: round2(M.range.mid), sl: round2(M.range.low) - 15, t1: round2(M.range.mid + (M.range.high - M.range.mid) * .4), t2: round2(M.range.high) - 10, t3: round2(M.range.high) }
   };
   const pricingIn = bullP >= bearP && bullP >= rangeP ? 'bullish' : bearP >= rangeP ? 'bearish' : 'neutral';
