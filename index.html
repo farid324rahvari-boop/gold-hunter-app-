@@ -948,7 +948,7 @@ function generateAlerts(state) {
   if (h4.rsi > 70 || h4.rsi < 30) alerts.push({ icon: '📊', color: 'var(--neutral)', title: 'RSI در ناحیه افراطی', desc: `RSI تایم‌فریم 4H روی ${round2(h4.rsi)} است.` });
   if ((h4.price > h4.ema20) !== (state._prevAboveEma)) alerts.push({ icon: '📈', color: 'var(--gold)', title: 'عبور از EMA20', desc: `قیمت ${h4.price > h4.ema20 ? 'بالای' : 'زیر'} EMA20 در 4H قرار گرفت.` });
   if (state.newsRisk.high) alerts.push({ icon: '📰', color: 'var(--bearish)', title: 'خبر پرریسک نزدیک', desc: state.newsRisk.label });
-  if (state.decision.rr && state.decision.rr < CONFIG.MIN_ACCEPTABLE_RR) alerts.push({ icon: '📉', color: 'var(--bearish)', title: 'افت نسبت ریسک/ریوارد', desc: `R:R فعلی 1:${state.decision.rr.toFixed(2)} کمتر از حداقل مجاز است.` });
+  if (state.decision.rr && state.decision.rr < CONFIG.MIN_ACCEPTABLE_RR) alerts.push({ icon: '📉', color: 'var(--bearish)', title: 'افت نسبت ریسک/ریوارد ساختاری', desc: `R:R فعلی 1:${state.decision.rr.toFixed(2)} کمتر از حداقل مجاز است.` });
   if (state.range.isMidRange) alerts.push({ icon: '🚫', color: 'var(--neutral)', title: 'میانه محدوده رنج', desc: 'طبق قوانین شکارچی طلا، ورود در Mid Range ممنوع است.' });
   if (!alerts.length) alerts.push({ icon: '🔕', color: 'var(--text-muted)', title: 'هشدار فعالی وجود ندارد', desc: 'در حال حاضر هیچ‌کدام از شرایط هشدار برقرار نیست.' });
   return alerts;
@@ -1278,7 +1278,7 @@ function renderDashboard() {
         ${scoreBar('تکنیکال', M.scores.technical)}
         ${scoreBar('فاندامنتال', M.scores.fundamental)}
         ${scoreBar('رژیم بازار', M.scores.regime)}
-        ${scoreBar('ریسک/ریوارد', M.scores.riskReward)}
+        ${scoreBar('ریسک/ریوارد ساختاری', M.scores.riskReward)}
         ${scoreBar('ریسک خبری', M.scores.news)}
       </div>
     </div>
@@ -1564,7 +1564,7 @@ function renderAI() {
         <div class="stat-box"><div class="stat-label">Hunter Score</div><div class="stat-value">${M.hunterScore}/10</div></div>
         <div class="stat-box"><div class="stat-label">Breakout Status</div><div class="stat-value" style="font-size:11px">${M.breakout.progress}</div></div>
         <div class="stat-box"><div class="stat-label">Fake Breakout Risk</div><div class="stat-value" style="font-size:12px">${M.breakout.fakeRisk ? 'بله' : 'خیر'}</div></div>
-        <div class="stat-box"><div class="stat-label">Risk/Reward</div><div class="stat-value">${M.decision.rr ? '1:' + M.decision.rr.toFixed(2) : '—'}</div></div>
+        <div class="stat-box"><div class="stat-label">Risk/Reward (ساختاری)</div><div class="stat-value">${M.decision.rr ? '1:' + M.decision.rr.toFixed(2) : '—'}</div></div>
         <div class="stat-box"><div class="stat-label">Nearest Support</div><div class="stat-value" style="color:var(--bullish)">${round2(M.techByTF['Daily'].support)}</div></div>
         <div class="stat-box"><div class="stat-label">Nearest Resistance</div><div class="stat-value" style="color:var(--bearish)">${round2(M.techByTF['Daily'].resistance)}</div></div>
       </div>
@@ -1620,7 +1620,7 @@ function buildTodayPlan(M) {
         <div class="stat-box"><div class="stat-label">نقطه ورود</div><div class="stat-value">${round2(rr.entry)}</div></div>
         <div class="stat-box"><div class="stat-label">حد ضرر</div><div class="stat-value" style="color:var(--bearish)">${round2(rr.sl)}</div></div>
         <div class="stat-box"><div class="stat-label">هدف</div><div class="stat-value" style="color:var(--bullish)">${round2(rr.target)}</div></div>
-        <div class="stat-box"><div class="stat-label">ریسک/ریوارد</div><div class="stat-value">1:${rr.rr.toFixed(2)}</div></div>
+        <div class="stat-box"><div class="stat-label">ریسک/ریوارد ساختاری</div><div class="stat-value">1:${rr.rr.toFixed(2)}</div></div>
         <div class="stat-box"><div class="stat-label">Hunter Score</div><div class="stat-value">${M.hunterScore}/10</div></div>
       </div>
       <div class="field-hint" style="margin-top:10px">⚠ این اعداد لحظه‌ای‌اند و با تغییر بازار عوض می‌شوند — قبل از ورود واقعی، دوباره اپ را باز کن و مطمئن شو هنوز همین شرایط برقرار است. حجم پوزیشن را از «مدیریت ریسک» محاسبه کن.</div>`;
@@ -1810,7 +1810,7 @@ function renderSettings() {
     <div class="card">
       <div class="card-title-row"><div class="card-title">وزن‌های Hunter Score</div></div>
       ${['technical', 'fundamental', 'regime', 'riskReward', 'news'].map(k => `
-        <div class="field"><label>${{ technical: 'تکنیکال', fundamental: 'فاندامنتال', regime: 'رژیم بازار', riskReward: 'ریسک/ریوارد', news: 'ریسک خبری' }[k]} (${Math.round(settings.weights[k] * 100)}%)</label>
+        <div class="field"><label>${{ technical: 'تکنیکال', fundamental: 'فاندامنتال', regime: 'رژیم بازار', riskReward: 'ریسک/ریوارد ساختاری', news: 'ریسک خبری' }[k]} (${Math.round(settings.weights[k] * 100)}%)</label>
           <input type="range" min="0" max="100" id="w-${k}" value="${Math.round(settings.weights[k] * 100)}" style="width:100%"></div>`).join('')}
       <div class="field-hint">مجموع وزن‌ها هنگام ذخیره به‌صورت خودکار به ۱۰۰٪ نرمال‌سازی می‌شود.</div>
     </div>
