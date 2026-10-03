@@ -1155,7 +1155,13 @@ async function buildMarketState() {
   // تقویم اقتصادی همیشه به DEMO برمی‌گردد اگر در دسترس نباشد (مثلاً کلید تنظیم نشده)؛
   // نبود آن به‌تنهایی نباید کل داشبورد (قیمت/تکنیکال که ممکن است کاملاً Live باشند) را غیرفعال کند —
   // فقط خود تب فاندامنتال با تگ DEMO مشخص می‌شود.
-  if (calendarResult.status === STATUS.UNAVAILABLE) calendarResult = await demoProvider.getEconomicCalendar();
+  // نکته مهم: این داده دمو فقط برای پر نگه‌داشتن جدول نمایشی است و هرگز نباید وارد منطق
+  // تصمیم‌گیری (ریسک خبری / بایاس فاندامنتال) شود — وگرنه عدد ساختگی («۶.۵ ساعت تا خبر مهم»،
+  // «۲ رویداد پایین‌تر از پیش‌بینی») بدون هشدار در تحلیل نهایی ظاهر می‌شود. برای همین وضعیت
+  // اصلی (قبل از جایگزینی با دمو) جدا نگه داشته می‌شود تا newsRisk/fundamental بر اساس آن
+  // تصمیم بگیرند، نه بر اساس محتوای دمو.
+  const calendarWasUnavailable = calendarResult.status === STATUS.UNAVAILABLE;
+  if (calendarWasUnavailable) calendarResult = await demoProvider.getEconomicCalendar();
   if (fundamentalsResult.status === STATUS.UNAVAILABLE) fundamentalsResult = await demoProvider.getFundamentals();
   if (newsResult.status === STATUS.UNAVAILABLE) newsResult = await demoProvider.getNews();
 
@@ -1166,8 +1172,11 @@ async function buildMarketState() {
   const regime = detectRegime(techByTF);
   const breakout = evaluateBreakout(techByTF, techByTF['Daily'].resistance);
   const range = evaluateRange(techByTF);
-  const newsRisk = evaluateNewsRisk(calendarResult);
-  const fundamental = evaluateFundamental(calendarResult.events || [], fundamentalsResult.indicators || null);
+  // calendarWasUnavailable یعنی داده واقعی تقویم نبوده و calendarResult فعلاً دموست؛ در این حالت
+  // به evaluateNewsRisk/evaluateFundamental وضعیت UNAVAILABLE واقعی داده می‌شود (نه رویدادهای دمو)
+  // تا نتیجه صادقانه «نامشخص» باشد، نه یک ریسک/بایاس ساختگی که از دمو ساخته شده.
+  const newsRisk = evaluateNewsRisk(calendarWasUnavailable ? { status: STATUS.UNAVAILABLE } : calendarResult);
+  const fundamental = evaluateFundamental(calendarWasUnavailable ? [] : (calendarResult.events || []), fundamentalsResult.indicators || null);
   const decision = runRuleEngine({ techByTF, regime, breakout, range, newsRisk, fundamental });
   const hunter = calcHunterScore({ techByTF, regime, decision, newsRisk, fundamental }, settings.weights);
 
